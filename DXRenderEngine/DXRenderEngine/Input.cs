@@ -1,8 +1,8 @@
-﻿using SharpDX;
-using SharpDX.DirectInput;
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
+using Vortice;
+using Vortice.DirectInput;
 
-namespace SharpDXRenderEngine
+namespace DXRenderEngine
 {
     public class Input
     {
@@ -16,7 +16,7 @@ namespace SharpDXRenderEngine
         public Keyboard keyboard;
         public Chey[] cheyArray;
 
-        private bool Running = true;
+        // input fields
         public int PollingRate = 1000;
         public double elapsedTime;
         private long t1, t2;
@@ -27,7 +27,13 @@ namespace SharpDXRenderEngine
             Reference = reference;
         }
 
-        public void InitializeMouse()
+        public void InitializeInputs()
+        {
+            InitializeMouse();
+            InitializeKeyboard();
+        }
+
+        private void InitializeMouse()
         {
             mouse = new Mouse(new DirectInput());
             mouse.Acquire();
@@ -39,10 +45,10 @@ namespace SharpDXRenderEngine
             DeltaMousePos = new Vector2(state.X, state.Y);
             GetCursorPos(out POINT p);
             MousePos = new Vector2(p.X, p.Y);
-            DeltaMouseScroll = state.Z;
+            DeltaMouseScroll = state.Z / 120;
         }
 
-        public void InitializeKeyboard()
+        private void InitializeKeyboard()
         {
             keyboard = new Keyboard(new DirectInput());
             keyboard.Properties.BufferSize = 128;
@@ -70,7 +76,7 @@ namespace SharpDXRenderEngine
             DeltaMousePos = new Vector2(state.X, state.Y);
             GetCursorPos(out POINT p);
             MousePos = new Vector2(p.X, p.Y);
-            DeltaMouseScroll = state.Z;
+            DeltaMouseScroll = state.Z / 120;
         }
 
         public void GetKeys()
@@ -107,18 +113,13 @@ namespace SharpDXRenderEngine
         {
             sw.Start();
             t1 = sw.ElapsedTicks;
-            while (Running)
+            while (Reference.Running)
             {
                 GetMouseData();
                 GetKeys();
                 Reference.UserInput();
                 GetTime();
             }
-        }
-
-        public void StopRunning()
-        {
-            Running = false;
         }
 
         public bool KeyDown(Key key)

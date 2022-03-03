@@ -320,30 +320,36 @@ float3 RayCastEthan(Ray ray, uint itteration)
 VertexShaderOutput vertexShaderPassthrough(VertexShaderInput In)
 {
 	VertexShaderOutput Out;
-	Out.position = float4(In.position, 1.0f);
+	Out.position = mul(WorldMatrix, float4(In.position, 1.0f));
 	Out.positionws = float4(In.position, 1.0f);
 	Out.normal = In.normal.xyz;
 	Out.color = In.color;
 	return Out;
 }
 
+// temporal dithering
 float3 pixelShaderPassthrough(VertexShaderOutput In) : SV_TARGET
 {
 	return In.color.xyz + ((random(In.position.xy) - 0.5f) / 255.0f);
 }
 
+// pixel shader passthrough
+float3 pixelShaderCleanPassthrough(VertexShaderOutput In) : SV_TARGET
+{
+	return In.color.xyz;
+}
+
 // shadow rasterizer
-PixelInputType shadowVertexShader(float3 position : POSITION)
+PixelInputType shadowVertexShader(VertexShaderInput In)
 {
 	PixelInputType Out;
-	Out.position = mul(LightProjectionMatrix, float4(position, 1.0f));
+	Out.position = mul(LightProjectionMatrix, float4(In.position, 1.0f));
 	Out.depthPosition = Out.position;
 	return Out;
 }
 
 float4 shadowPixelShader(PixelInputType In) : SV_TARGET
 {
-	//return In.position.z / In.position.w;
 	return In.depthPosition.z / In.depthPosition.w;
 }
 
@@ -507,7 +513,9 @@ PixelShaderOutput pixelShader2(VertexShaderOutput In)
 // postprocessing pixel shader
 float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 {
-	float depth = ShaderTexture.SampleLevel(ColorSampler, In.position.xy / float2(Width, Height), 0).w;
+	// depth test
+
+	/*float depth = ShaderTexture.SampleLevel(ColorSampler, In.position.xy / float2(Width, Height), 0).w;
 	if (depth < 1000.0f)
 	{
 		if (depth < 0.3f)
@@ -521,7 +529,7 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 		else
 			return 1.0f;
 	}
-	return 0.0f;
+	return 0.0f;*/
 	
 	// no post process
 
