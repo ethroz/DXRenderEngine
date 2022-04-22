@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DXRenderEngine": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}

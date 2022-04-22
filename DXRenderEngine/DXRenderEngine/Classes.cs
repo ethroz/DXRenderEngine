@@ -2,56 +2,55 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
-using System.Runtime.InteropServices;
-using Vortice.Direct3D;
+using System.Reflection;
 using Vortice.Direct3D11;
 using Vortice.DirectInput;
 using Vortice.Mathematics;
-using Color = Vortice.Mathematics.Color;
 
 namespace DXRenderEngine;
 
 public class Gameobject
 {
-    public string name;
-    public Vector3 position, rotation, scale;
-    public TriNormsCol[] triangles;
-    public TriNormsCol[] projectedTriangles;
-    public int verticesOffset;
-    public Matrix4x4 world;
+    public string Name;
+    public Vector3 Position, Rotation, Scale;
+    public TriNormsCol[] Triangles;
+    public TriNormsCol[] ProjectedTriangles;
+    public int VerticesOffset;
+    public Matrix4x4 World;
+    public Matrix4x4 Normal;
 
     public Gameobject()
     {
-        name = "object";
-        position = new Vector3();
-        rotation = new Vector3();
-        scale = new Vector3(1.0f);
+        Name = "object";
+        Position = new Vector3();
+        Rotation = new Vector3();
+        Scale = new Vector3(1.0f);
     }
 
     public Gameobject(string name)
     {
-        this.name = name;
-        position = new Vector3();
-        rotation = new Vector3();
-        scale = new Vector3(1.0f);
+        this.Name = name;
+        Position = new Vector3();
+        Rotation = new Vector3();
+        Scale = new Vector3(1.0f);
     }
 
     public Gameobject(string name, Vector3 p, Vector3 r, Vector3 s, TriNormsCol[] v)
     {
-        this.name = name;
-        position = p;
-        rotation = r;
-        scale = s;
-        triangles = v;
+        this.Name = name;
+        Position = p;
+        Rotation = r;
+        Scale = s;
+        Triangles = v;
     }
 
-    public static Gameobject GetObjectFromFile(string FileName)
+    public static Gameobject GetObject(string resource)
     {
-        if (!File.Exists(FileName))
-            return null;
-        string[] document = File.ReadAllLines(FileName);
+        string[] document = GetFileFromResource(resource);
         if (document == null)
+        {
             return null;
+        }
 
         string name = "object";
         TriNormsCol[] triangles;
@@ -174,7 +173,7 @@ public class Gameobject
             for (int i = 0; i < vertexIndices.Count; i++)
             {
                 Vector3 normal = Vector3.Normalize(Vector3.Cross(verts[vertexIndices[i][1]] - verts[vertexIndices[i][0]], verts[vertexIndices[i][2]] - verts[vertexIndices[i][1]]));
-                Vector4 col = (colors[vertexIndices[i][0]].ToVector4() + colors[vertexIndices[i][1]].ToVector4() + colors[vertexIndices[i][2]].ToVector4()) / 3.0f;
+                Vector3 col = (colors[vertexIndices[i][0]].ToVector3() + colors[vertexIndices[i][1]].ToVector3() + colors[vertexIndices[i][2]].ToVector3()) / 3.0f;
                 triangles[i] = new TriNormsCol(new Vector3[] { verts[vertexIndices[i][0]], verts[vertexIndices[i][1]], verts[vertexIndices[i][2]] }, normal, col);
             }
         }
@@ -182,20 +181,20 @@ public class Gameobject
         {
             for (int i = 0; i < vertexIndices.Count; i++)
             {
-                Vector4 col = (colors[vertexIndices[i][0]].ToVector4() + colors[vertexIndices[i][1]].ToVector4() + colors[vertexIndices[i][2]].ToVector4()) / 3.0f;
-                triangles[i] = new TriNormsCol(new Vector3[] { verts[vertexIndices[i][0]], verts[vertexIndices[i][1]], verts[vertexIndices[i][2]] }, new Vector3[] { norms[normalIndices[i][0]], norms[normalIndices[i][1]], norms[normalIndices[i][2]] }, col, new float[3] { 0.0f, 0.0f, 0.0f });
+                Vector3 col = (colors[vertexIndices[i][0]].ToVector3() + colors[vertexIndices[i][1]].ToVector3() + colors[vertexIndices[i][2]].ToVector3()) / 3.0f;
+                triangles[i] = new TriNormsCol(new Vector3[] { verts[vertexIndices[i][0]], verts[vertexIndices[i][1]], verts[vertexIndices[i][2]] }, new Vector3[] { norms[normalIndices[i][0]], norms[normalIndices[i][1]], norms[normalIndices[i][2]] }, col);
             }
         }
         return new Gameobject(name, position, new Vector3(), new Vector3(1.0f), triangles);
     }
 
-    public static Gameobject[] GetObjectsFromFile(string FileName)
+    public static Gameobject[] GetObjects(string resource)
     {
-        if (!File.Exists(FileName))
-            return null;
-        string[] document = File.ReadAllLines(FileName);
+        string[] document = GetFileFromResource(resource);
         if (document == null)
+        {
             return null;
+        }
 
         List<Gameobject> objs = new List<Gameobject>();
         List<Vector3> positions = new List<Vector3>();
@@ -225,25 +224,25 @@ public class Gameobject
                     pos /= positions.Count;
                     for (int j = 0; j < positions.Count; j++)
                         positions[j] -= pos;
-                    objs[objectIndex].triangles = new TriNormsCol[vertexIndices.Count];
+                    objs[objectIndex].Triangles = new TriNormsCol[vertexIndices.Count];
                     if (norms.Count == 0)
                     {
                         for (int j = 0; j < vertexIndices.Count; j++)
                         {
                             Vector3 normal = Vector3.Normalize(Vector3.Cross(positions[vertexIndices[j][1]] - positions[vertexIndices[j][0]], positions[vertexIndices[j][2]] - positions[vertexIndices[j][1]]));
-                            Vector4 col = (colors[vertexIndices[j][0]].ToVector4() + colors[vertexIndices[j][1]].ToVector4() + colors[vertexIndices[j][2]].ToVector4()) / 3.0f;
-                            objs[objectIndex].triangles[j] = new TriNormsCol(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, normal, col);
+                            Vector3 col = (colors[vertexIndices[j][0]].ToVector3() + colors[vertexIndices[j][1]].ToVector3() + colors[vertexIndices[j][2]].ToVector3()) / 3.0f;
+                            objs[objectIndex].Triangles[j] = new TriNormsCol(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, normal, col);
                         }
                     }
                     else
                     {
                         for (int j = 0; j < vertexIndices.Count; j++)
                         {
-                            Vector4 col = (colors[vertexIndices[j][0]].ToVector4() + colors[vertexIndices[j][1]].ToVector4() + colors[vertexIndices[j][2]].ToVector4()) / 3.0f;
-                            objs[objectIndex].triangles[j] = new TriNormsCol(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, new Vector3[] { norms[normalIndices[j][0]], norms[normalIndices[j][1]], norms[normalIndices[j][2]] }, col, new float[3] { 0.0f, 0.0f, 0.0f });
+                            Vector3 col = (colors[vertexIndices[j][0]].ToVector3() + colors[vertexIndices[j][1]].ToVector3() + colors[vertexIndices[j][2]].ToVector3()) / 3.0f;
+                            objs[objectIndex].Triangles[j] = new TriNormsCol(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, new Vector3[] { norms[normalIndices[j][0]], norms[normalIndices[j][1]], norms[normalIndices[j][2]] }, col);
                         }
                     }
-                    objs[objectIndex].position = pos;
+                    objs[objectIndex].Position = pos;
                     vertexCount += verticesCount;
                     normalCount += normalsCount;
                     verticesCount = 0;
@@ -356,61 +355,78 @@ public class Gameobject
         position /= positions.Count;
         for (int j = 0; j < positions.Count; j++)
             positions[j] -= position;
-        objs[objectIndex].triangles = new TriNormsCol[vertexIndices.Count];
+        objs[objectIndex].Triangles = new TriNormsCol[vertexIndices.Count];
         if (norms.Count == 0)
         {
             for (int i = 0; i < vertexIndices.Count; i++)
             {
                 Vector3 normal = Vector3.Normalize(Vector3.Cross(positions[vertexIndices[i][1]] - positions[vertexIndices[i][0]], positions[vertexIndices[i][2]] - positions[vertexIndices[i][1]]));
-                Vector4 col = (colors[vertexIndices[i][0]].ToVector4() + colors[vertexIndices[i][1]].ToVector4() + colors[vertexIndices[i][2]].ToVector4()) / 3.0f;
-                objs[objectIndex].triangles[i] = new TriNormsCol(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, normal, col);
+                Vector3 col = (colors[vertexIndices[i][0]].ToVector3() + colors[vertexIndices[i][1]].ToVector3() + colors[vertexIndices[i][2]].ToVector3()) / 3.0f;
+                objs[objectIndex].Triangles[i] = new TriNormsCol(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, normal, col);
             }
         }
         else
         {
             for (int i = 0; i < vertexIndices.Count; i++)
             {
-                Vector4 col = (colors[vertexIndices[i][0]].ToVector4() + colors[vertexIndices[i][1]].ToVector4() + colors[vertexIndices[i][2]].ToVector4()) / 3.0f;
-                objs[objectIndex].triangles[i] = new TriNormsCol(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, new Vector3[] { norms[normalIndices[i][0]], norms[normalIndices[i][1]], norms[normalIndices[i][2]] }, col, new float[3] { 0.0f, 0.0f, 0.0f });
+                Vector3 col = (colors[vertexIndices[i][0]].ToVector3() + colors[vertexIndices[i][1]].ToVector3() + colors[vertexIndices[i][2]].ToVector3()) / 3.0f;
+                objs[objectIndex].Triangles[i] = new TriNormsCol(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, new Vector3[] { norms[normalIndices[i][0]], norms[normalIndices[i][1]], norms[normalIndices[i][2]] }, col);
             }
         }
-        objs[objectIndex].position = position;
+        objs[objectIndex].Position = position;
 
         return objs.ToArray();
+    }
+
+    private static string[] GetFileFromResource(string resource)
+    {
+        Assembly assembly = Assembly.GetExecutingAssembly();
+
+        List<string> output = new List<string>();
+        using (Stream stream = assembly.GetManifestResourceStream(resource))
+        using (StreamReader reader = new StreamReader(stream))
+        {
+            for (string line = reader.ReadLine(); line != null; line = reader.ReadLine())
+            {
+                output.Add(line);
+            }
+        }
+
+        return output.ToArray();
     }
 
     public static void SaveGameObjectsToFile(Gameobject o, string FileName)
     {
         List<string> document = new List<string>();
-        document.Add("# Made by Ethan Rozee in SharpDXRayTracingEngine");
-        document.Add("o " + o.name);
+        document.Add("# Made by Ethan Rozee in DXRenderEngine");
+        document.Add("o " + o.Name);
 
         // vertices
-        for (int i = 0; i < o.triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; i++)
         {
             for (int j = 0; j < 3; j++)
             {
                 document.Add("v");
-                Vector3 v = o.triangles[i].Vertices[j];
+                Vector3 v = o.Triangles[i].Vertices[j];
                 document[document.Count - 1] += " " + v.X.ToString("N6") + " " 
                     + v.Y.ToString("N6") + " " + v.Z.ToString("N6");
             }
         }
 
         // normals
-        for (int i = 0; i < o.triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; i++)
         {
             for (int j = 0; j < 3; j++)
             {
                 document.Add("vn");
-                Vector3 v = o.triangles[i].Normals[j];
+                Vector3 v = o.Triangles[i].Normals[j];
                 document[document.Count - 1] += " " + v.X.ToString("N4") + " "
                     + v.Y.ToString("N4") + " " + v.Z.ToString("N4");
             }
         }
 
         // faces
-        for (int i = 0; i < o.triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; i++)
         {
             document.Add("f");
             for (int j = 0; j < 3; j++)
@@ -433,25 +449,25 @@ public class Gameobject
             List<List<int[]>> normalIndices = new List<List<int[]>>();
             List<Vector3> verts = new List<Vector3>();
             List<List<Vector3>> allNorms = new List<List<Vector3>>();
-            for (int i = 0; i < triangles.Length; i++)
+            for (int i = 0; i < Triangles.Length; i++)
             {
                 for (int j = 0; j < 3; j++)
                 {
                     int count = 0;
                     for (int k = 0; k < verts.Count; k++)
                     {
-                        if (triangles[i].Vertices[j] == verts[k])
+                        if (Triangles[i].Vertices[j] == verts[k])
                         {
-                            allNorms[k].Add(triangles[i].Normals[j]);
+                            allNorms[k].Add(Triangles[i].Normals[j]);
                             normalIndices[k].Add(new int[] { i, j });
                             count++;
                         }
                     }
                     if (count == 0)
                     {
-                        verts.Add(triangles[i].Vertices[j]);
+                        verts.Add(Triangles[i].Vertices[j]);
                         allNorms.Add(new List<Vector3>());
-                        allNorms[allNorms.Count - 1].Add(triangles[i].Normals[j]);
+                        allNorms[allNorms.Count - 1].Add(Triangles[i].Normals[j]);
                         normalIndices.Add(new List<int[]>());
                         normalIndices[normalIndices.Count - 1].Add(new int[] { i, j });
                     }
@@ -460,11 +476,9 @@ public class Gameobject
 
             // average the normals that have an angle less than max angle for each unique vertex
             Vector3[][] norms = new Vector3[allNorms.Count][];
-            float[][] specials = new float[allNorms.Count][];
             for (int i = 0; i < allNorms.Count; i++)
             {
                 norms[i] = new Vector3[allNorms[i].Count];
-                specials[i] = new float[allNorms[i].Count];
                 for (int j = 0; j < allNorms[i].Count; j++)
                 {
                     List<Vector3> values = new List<Vector3>();
@@ -487,17 +501,16 @@ public class Gameobject
                             }
                             if (skip)
                                 continue;
-                            if (Math.Acos(Math.Min(Math.Max(Vector3.Dot(allNorms[i][j], allNorms[i][k]), -1.0f), 1.0f)) / Engine.Deg2Rad < maxAngleDeg)
+                            if (Math.Acos(Math.Min(Math.Max(Vector3.Dot(allNorms[i][j], allNorms[i][k]), -1.0f), 1.0f)) / Engine.DEG2RAD < maxAngleDeg)
                             {
                                 values.Add(allNorms[i][k]);
                                 average += allNorms[i][k];
                             }
                         }
-                        specials[i][j] = 0.0f;
+                        norms[i][j] = Normalize(average);
                     }
                     else
-                        specials[i][j] = 1.0f;
-                    norms[i][j] = Normalize(average);
+                        norms[i][j] = new Vector3();
                 }
             }
 
@@ -506,32 +519,38 @@ public class Gameobject
             {
                 for (int j = 0; j < norms[i].Length; j++)
                 {
-                    triangles[normalIndices[i][j][0]].Normals[normalIndices[i][j][1]] = norms[i][j];
-                    triangles[normalIndices[i][j][0]].Specials[normalIndices[i][j][1]] = specials[i][j];
+                    Triangles[normalIndices[i][j][0]].Normals[normalIndices[i][j][1]] = norms[i][j];
                 }
             }
         }
         else // shade flat
         {
-            for (int i = 0; i < triangles.Length; i++)
+            for (int i = 0; i < Triangles.Length; i++)
             {
-                TriNormsCol current = triangles[i];
+                TriNormsCol current = Triangles[i];
                 Vector3 normal = Normalize(Vector3.Cross(current.Vertices[1] - current.Vertices[0], current.Vertices[2] - current.Vertices[1]));
-                triangles[i].Normals = new Vector3[3] { normal, normal, normal };
-                triangles[i].Specials = new float[3] { 0.0f, 0.0f, 0.0f };
+                Triangles[i].Normals = new Vector3[3] { normal, normal, normal };
             }
         }
     }
 
-    public void ChangeGameObjectColor(Vector4 color)
+    public void ChangeObjectCharacteristics(Vector3 color, float reflect)
     {
-        for (int i = 0; i < triangles.Length; i++)
+        for (int i = 0; i < Triangles.Length; i++)
         {
-            triangles[i].Color = color;
+            Triangles[i].Color = color;
+            Triangles[i].Reflectivity = reflect;
         }
     }
 
-    public static Vector3 Normalize(Vector3 v)
+    public void CreateMatrices()
+    {
+        World = Engine.CreateWorld(Position, Rotation, Scale);
+        Matrix4x4.Invert(World, out Matrix4x4 output);
+        Normal = Matrix4x4.Transpose(output);
+    }
+
+    private static Vector3 Normalize(Vector3 v)
     {
         if (v.Length() == 0.0f)
             return new Vector3();
@@ -543,29 +562,42 @@ public class Gameobject
         }
         return new Vector3((float)(x / l), (float)(y / l), (float)(z / l)); ;
     }
+
+    internal ObjectInstance GetInstance()
+    {
+        return new ObjectInstance(World, Normal);
+    }
 }
 
 public class Sphere
 {
-    public Vector3 position;
-    public float radius;
-    public Vector4 color;
-    public Vector4 Data;
+    public Vector3 Position;
+    public float Radius;
+    public Vector3 Color;
+    public float IOR;
+    public float Reflectivity;
 
     public Sphere()
     {
-        position = new Vector3();
-        color = Colors.White.ToVector4();
-        radius = 0.5f;
-        Data = new Vector4(float.PositiveInfinity, 0.0f, 0.0f, 0.0f);
+        Position = new Vector3();
+        Color = Colors.White.ToVector3();
+        Radius = 1.0f;
+        IOR = 1.5f;
+        Reflectivity = 0.1f;
     }
 
-    public Sphere(Vector3 p, float r, Vector4 c, Vector4 d)
+    public Sphere(Vector3 position, float radius, Vector3 color, float ior, float reflect)
     {
-        position = p;
-        color = c;
-        radius = r;
-        Data = d;
+        Position = position;
+        Radius = radius;
+        Color = color;
+        IOR = ior;
+        Reflectivity = reflect;
+    }
+
+    internal PackedSphere Pack()
+    {
+        return new PackedSphere(Position, Radius, Color, IOR, Reflectivity);
     }
 }
 
@@ -573,33 +605,102 @@ public class Light
 {
     public Vector3 Position;
     public float Radius;
-    public Vector4 Color;
+    public Vector3 Color;
     public float Luminosity;
     public float NearPlane = 0.1f;
     public float FarPlane = 100.0f;
-    public int ShadowRes = 4096;
+    public int ShadowRes = 1024;
     public ID3D11DepthStencilView ShadowStencilView;
     public ID3D11ShaderResourceView1 ShadowResourceView;
-    public ID3D11Texture2D1 ShadowBuffer;
+    public ID3D11Texture2D1 ShadowTexture;
     public ID3D11RenderTargetView1 LightTargetView;
     public ID3D11ShaderResourceView1 LightResourceView;
     public ID3D11Texture2D1 LightTexture;
     public Viewport ShadowViewPort;
     public Matrix4x4 ShadowProjectionMatrix;
-    public Matrix4x4 ShadowViewMatrix;
+    public Matrix4x4 LightMatrix;
 
-    public Light(Vector3 position, Vector4 color, float radius, float luminosity)
+    public Light()
+    {
+        Position = new Vector3();
+        Color = Colors.White.ToVector3();
+        Radius = 1.0f;
+        Luminosity = 1.0f;
+    }
+
+    public Light(Vector3 position, Vector3 color, float radius, float luminosity)
     {
         Position = position;
         Color = color;
         Radius = radius;
         Luminosity = luminosity;
     }
+
+    internal PackedLight Pack()
+    {
+        return new PackedLight(Position, Radius, Color);
+    }
+
+    public void GenerateMatrix()
+    {
+        Matrix4x4 shadowViewMatrix = Engine.CreateView(Position, new Vector3(90.0f, 0.0f, 0.0f));
+        LightMatrix = shadowViewMatrix * ShadowProjectionMatrix;
+    }
+
+}
+
+public class TriNormsCol
+{
+    public Vector3[] Vertices;
+    public Vector3[] Normals;
+    public Vector3 Color;
+    public float Reflectivity;
+
+    public TriNormsCol()
+    {
+        Vertices = new Vector3[3];
+        Normals = new Vector3[3];
+        Color = new Vector3();
+        Reflectivity = 0.0f;
+    }
+
+    public TriNormsCol(Vector3[] verts, Vector3 normal, Vector3 color, float reflect = 0.0f)
+    {
+        Vertices = verts;
+        Normals = new Vector3[3] { normal, normal, normal };
+        Color = color;
+        Reflectivity = reflect;
+    }
+
+    public TriNormsCol(Vector3[] verts, Vector3[] normals, Vector3 color, float reflect = 0.0f)
+    {
+        Vertices = verts;
+        Normals = normals;
+        Color = color;
+        Reflectivity = reflect;
+    }
+
+    public VertexPositionNormalColor GetVertexPositionNormalColor(int index)
+    {
+        return new VertexPositionNormalColor(new Vector4(Vertices[index], 1.0f), new Vector4(Normals[index], 0.0f), new Vector4(Color, Reflectivity));
+    }
+
+    internal PackedTriangle Pack()
+    {
+        Vector4[] vs = new Vector4[3];
+        Vector4[] ns = new Vector4[3];
+        for (int i = 0; i < 3; i++)
+        {
+            vs[i] = new Vector4(Vertices[i], 1.0f);
+            ns[i] = new Vector4(Normals[i], 0.0f);
+        }
+        return new PackedTriangle(vs, ns, Color, Reflectivity);
+    }
 }
 
 public class Chey
 {
-    public Key key;
+    public readonly Key key;
     public bool Down, Up, Held, Raised;
 
     public Chey(Key key)
@@ -619,236 +720,4 @@ public class Button
         Down = Up = Held = false;
         Raised = true;
     }
-}
-
-internal class QuickBitmap : IDisposable
-{
-    public IntPtr BitsHandle { get; private set; }
-    public int[] Bits { get; private set; }
-    public bool Disposed { get; private set; }
-    public int Height { get; private set; }
-    public int Width { get; private set; }
-
-    public unsafe QuickBitmap(int width, int height)
-    {
-        Width = width;
-        Height = height;
-        Bits = new int[width * height];
-        fixed (int* temp = &Bits[0])
-            BitsHandle = (IntPtr)temp;
-
-        //Bits = GC.AllocateArray<int>(width * height, true);
-        //BitsHandle = Marshal.UnsafeAddrOfPinnedArrayElement(Bits, 0);
-    }
-
-    public void SetPixel(int x, int y, Color color)
-    {
-        int index = x + (y * Width);
-        int col = (color.A << 24) + (color.R << 16) + (color.G << 8) + color.B;
-
-        Bits[index] = col;
-    }
-
-    public Color GetPixel(int x, int y)
-    {
-        int index = x + (y * Width);
-        int col = Bits[index];
-        Color result = new Color((col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF);
-
-        return result;
-    }
-
-    public void Dispose()
-    {
-        Dispose(true);
-    }
-
-    protected virtual void Dispose(bool boolean)
-    {
-        if (Disposed) return;
-        Disposed = true;
-        Bits = null;
-        BitsHandle = IntPtr.Zero;
-        Height = Width = 0;
-    }
-}
-
-public class EngineDescription
-{
-    public ProjectionDescription ProjectionDesc;
-    public int Width, Height, RefreshRate, RayDepth;
-    public Action OnAwake, OnStart, OnUpdate, UserInput;
-    public Engine.WindowState WindowState;
-    public Engine.RenderType RenderType;
-    public PrimitiveTopology Topology;
-
-    public EngineDescription(ProjectionDescription projectionDesc, int width = 640, int height = 480, int refreshRate = 60, int rayDepth = 1,
-        Action onAwake = null, Action onStart = null, Action onUpdate = null, Action userInput = null, Engine.WindowState windowState = Engine.WindowState.Normal,
-        Engine.RenderType renderType = Engine.RenderType.RasterizedGPU, PrimitiveTopology topology = PrimitiveTopology.TriangleList)
-    {
-        ProjectionDesc = projectionDesc;
-        Width = width;
-        Height = height;
-        RefreshRate = refreshRate;
-        RayDepth = rayDepth;
-        if (onAwake == null)
-            OnAwake = Empty;
-        else
-            OnAwake = onAwake;
-        if (onStart == null)
-            OnStart = Empty;
-        else
-            OnStart = onStart;
-        if (onUpdate == null)
-            OnUpdate = Empty;
-        else
-            OnUpdate = onUpdate;
-        if (userInput == null)
-            UserInput = Empty;
-        else
-            UserInput = userInput;
-        WindowState = windowState;
-        RenderType = renderType;
-        Topology = topology;
-    }
-
-    private void Empty() { }
-}
-
-public class ProjectionDescription
-{
-    public float FOVVDegrees, AspectRatioWH, NearPlane, FarPlane;
-
-    public ProjectionDescription(float fovVDegrees = 60.0f, float aspectRatioHW = 16.0f / 9.0f, float nearPlane = 0.01f, float farPlane = 1000.0f)
-    {
-        FOVVDegrees = fovVDegrees;
-        AspectRatioWH = aspectRatioHW;
-        NearPlane = nearPlane;
-        FarPlane = farPlane;
-    }
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct VertexPositionNormalColor
-{
-    public readonly Vector4 Normal;
-    public readonly Vector4 Color;
-    public readonly Vector3 Position;
-
-    public VertexPositionNormalColor(Vector3 position, Vector4 normal, Vector4 color)
-    {
-        Color = color;
-        Position = position;
-        Normal = normal;
-    }
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct VertexPositionTexture
-{
-    public Vector4 Position;
-    public Vector2 TextureUV;
-
-    public VertexPositionTexture(Vector3 position)
-    {
-        Position = new Vector4(position, 1.0f);
-        TextureUV = new Vector2();
-    }
-
-    public VertexPositionTexture(Vector3 position, Vector2 textureUV)
-    {
-        Position = new Vector4(position, 1.0f);
-        TextureUV = textureUV;
-    }
-}
-
-public struct TriNormsCol
-{
-    public Vector3[] Vertices;
-    public Vector3[] Normals;
-    public float[] Specials;
-    public Vector4 Color;
-
-    public TriNormsCol(int n)
-    {
-        Vertices = new Vector3[3];
-        Normals = new Vector3[3];
-        Specials = new float[3];
-        Color = new Vector4();
-    }
-
-    public TriNormsCol(Vector3[] verts, Vector3 normal, Vector4 color, float special = 0.0f)
-    {
-        Vertices = verts;
-        Normals = new Vector3[3] { normal, normal, normal };
-        Specials = new float[3] { special, special, special };
-        Color = color;
-    }
-
-    public TriNormsCol(Vector3[] verts, Vector3[] normals, Vector4 color, float[] specials)
-    {
-        Vertices = verts;
-        Normals = normals;
-        Specials = specials;
-        Color = color;
-    }
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 32)]
-public struct MainBuffer
-{
-    public Vector4 EyeRota;
-    public Vector4 EyeRotb;
-    public Vector4 EyeRotc;
-    public Vector3 EyePos;
-    public float Width;
-    public Vector3 BGCol;
-    public float Height;
-    public float MinBrightness;
-    public float ModdedTime;
-    public int RayDepth;
-    public int NumTris;
-    public int NumSpheres;
-    public int NumLights;
-
-    public MainBuffer(Matrix3x3 eyerot, Vector3 eyepos, Vector3 bgcol, float width, float height, float minbright, float moddedtime, int raydepth, int numtris, int numspheres, int numlights)
-    {
-        EyeRota = new Vector4(eyerot.M11, eyerot.M12, eyerot.M13, 0.0f);
-        EyeRotb = new Vector4(eyerot.M21, eyerot.M22, eyerot.M23, 0.0f);
-        EyeRotc = new Vector4(eyerot.M31, eyerot.M32, eyerot.M33, 0.0f);
-        EyePos = eyepos;
-        Width = width;
-        BGCol = bgcol;
-        Height = height;
-        MinBrightness = minbright;
-        ModdedTime = moddedtime;
-        RayDepth = raydepth;
-        NumTris = numtris;
-        NumSpheres = numspheres;
-        NumLights = numlights;
-    }
-}
-
-[StructLayout(LayoutKind.Sequential, Pack = 64)]
-public struct MatrixBuffer
-{
-    public Matrix4x4 ProjectionMatrix;
-    public Matrix4x4 ViewMatrix;
-    public Matrix4x4 WorldMatrix;
-    public Matrix4x4 NormalMatrix;
-    public Matrix4x4 LightProjectionMatrix;
-    public int LightIndex;
-}
-
-public struct EmptyBuffer
-{
-    public EmptyBuffer(int size) { this.size = size; }
-    public int size;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct POINT
-{
-    public int X;
-    public int Y;
 }

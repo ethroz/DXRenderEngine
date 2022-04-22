@@ -1,8 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
 
   <PropertyGroup>
-    <TargetFramework>net6.0</TargetFramework>
-    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
     <AutoGenerateBindingRedirects>True</AutoGenerateBindingRedirects>
     <IncludeAllContentForSelfExtract>True</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile>True</EnableCompressionInSingleFile>
@@ -14,17 +14,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="DXRenderEngine\Shaders.hlsl" />
+    <None Remove="DXRenderEngine\RasterShaders.hlsl" />
+    <None Remove="DXRenderEngine\RayShaders.hlsl" />
+    <None Remove="Objects\Objects.obj" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="DXRenderEngine\Shaders.hlsl" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="Objects\Objects.obj">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
+    <EmbeddedResource Include="DXRenderEngine\RayShaders.hlsl" />
+    <EmbeddedResource Include="DXRenderEngine\RasterShaders.hlsl" />
+    <EmbeddedResource Include="Objects\Objects.obj">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

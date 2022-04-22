@@ -1,90 +1,123 @@
-﻿using System.Runtime.InteropServices;
-using Vortice;
+﻿using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Vortice.DirectInput;
+using Result = SharpGen.Runtime.Result;
 
 namespace DXRenderEngine
 {
-    public class Input
+    public unsafe class Input : IDisposable
     {
         // Input Fields
-        private Engine Reference;
-        public Mouse mouse;
-        public Button[] buttons;
-        private Vector2 DeltaMousePos;
-        private Vector2 MousePos;
-        private int DeltaMouseScroll;
-        public Keyboard keyboard;
-        public Chey[] cheyArray;
+        private readonly Engine reference;
+        private readonly Action userInput;
+        private readonly IntPtr handle;
+        private IDirectInputDevice8 mouse;
+        private Button[] buttons;
+        private POINT deltaMousePos;
+        private POINT mousePos;
+        private int deltaMouseScroll;
+        private IDirectInputDevice8 keyboard;
+        private Chey[] cheyArray;
 
         // input fields
-        public int PollingRate = 1000;
-        public double elapsedTime;
+        public const int POLLING_RATE = 250;
+        public double ElapsedTime { get; private set; }
         private long t1, t2;
-        private System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
+        private readonly Stopwatch sw = new Stopwatch();
+        private const int KEYBOARD_BUFFER_SIZE = 256;
 
-        public Input(Engine reference)
+        public Input(IntPtr handle, Engine reference, Action userInput)
         {
-            Reference = reference;
+            this.handle = handle;
+            this.reference = reference;
+            this.userInput = userInput;
         }
 
         public void InitializeInputs()
         {
-            InitializeMouse();
+            IntPtr module = GetModuleHandle(null);
+            IDirectInput8 di8 = DInput.DirectInput8Create(module);
+            foreach (DeviceInstance di in di8.GetDevices())
+            {
+                switch (di.Type)
+                {
+                    case DeviceType.Keyboard:
+                        keyboard = di8.CreateDevice(di.ProductGuid);
+                        keyboard.SetDataFormat<RawKeyboardState>();
+                        keyboard.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive);
+                        keyboard.Acquire();
+                        break;
+                    case DeviceType.Mouse:
+                        mouse = di8.CreateDevice(di.ProductGuid);
+                        mouse.SetDataFormat<RawMouseState>();
+                        mouse.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive);
+                        mouse.Acquire();
+                        break;
+                }
+            }
             InitializeKeyboard();
+            InitializeMouse();
         }
 
         private void InitializeMouse()
         {
-            mouse = new Mouse(new DirectInput());
             mouse.Acquire();
-            var state = mouse.GetCurrentState();
+            MouseState state = mouse.GetCurrentMouseState();
             var allButtons = state.Buttons;
             buttons = new Button[allButtons.Length];
             for (int i = 0; i < allButtons.Length; i++)
                 buttons[i] = new Button();
-            DeltaMousePos = new Vector2(state.X, state.Y);
-            GetCursorPos(out POINT p);
-            MousePos = new Vector2(p.X, p.Y);
-            DeltaMouseScroll = state.Z / 120;
+            GetCursorPos(out mousePos);
         }
 
         private void InitializeKeyboard()
         {
-            keyboard = new Keyboard(new DirectInput());
-            keyboard.Properties.BufferSize = 128;
             keyboard.Acquire();
-            var state = keyboard.GetCurrentState();
-            var allKeys = state.AllKeys;
-            cheyArray = new Chey[allKeys.Count];
-            for (int i = 0; i < allKeys.Count; i++)
-                cheyArray[i] = new Chey(allKeys[i]);
+            cheyArray = new Chey[KEYBOARD_BUFFER_SIZE];
+            for (int i = 0; i < KEYBOARD_BUFFER_SIZE; i++)
+            {
+                char[] keySpelling = ((Key)i).ToString().ToCharArray();
+                bool containsLetter = false;
+                foreach (char c in keySpelling)
+                {
+                    if (char.IsLetter(c))
+                    {
+                        containsLetter = true;
+                        break;
+                    }
+                }
+                if (containsLetter)
+                {
+                    cheyArray[i] = new Chey((Key)i);
+                }
+            }
         }
 
         public void GetMouseData()
         {
-            mouse.Poll();
-            var state = mouse.GetCurrentState();
-            var butts = state.Buttons;
-            for (int i = 0; i < buttons.Length; i++)
+            var state = mouse.GetCurrentMouseState();
+            var butons = state.Buttons;
+            for (int i = 0; i < butons.Length; i++)
             {
-                bool pressed = butts[i];
+                bool pressed = butons[i];
                 buttons[i].Down = buttons[i].Raised && pressed;
                 buttons[i].Up = buttons[i].Held && !pressed;
                 buttons[i].Held = pressed;
                 buttons[i].Raised = !pressed;
             }
-            DeltaMousePos = new Vector2(state.X, state.Y);
-            GetCursorPos(out POINT p);
-            MousePos = new Vector2(p.X, p.Y);
-            DeltaMouseScroll = state.Z / 120;
+            deltaMousePos = new POINT(state.X, state.Y);
+            GetCursorPos(out mousePos);
+            deltaMouseScroll = state.Z / 120;
         }
 
         public void GetKeys()
         {
-            keyboard.Poll();
-            var state = keyboard.GetCurrentState();
-            for (int i = 0; i < cheyArray.Length; i++)
+            KeyboardState state = keyboard.GetCurrentKeyboardState();
+            for (int i = 0; i < KEYBOARD_BUFFER_SIZE; i++)
             {
+                if (cheyArray[i] == null)
+                    continue;
                 bool pressed = state.IsPressed(cheyArray[i].key);
                 cheyArray[i].Down = cheyArray[i].Raised && pressed;
                 cheyArray[i].Up = cheyArray[i].Held && !pressed;
@@ -96,13 +129,13 @@ namespace DXRenderEngine
         private void GetTime()
         {
             t2 = sw.ElapsedTicks;
-            elapsedTime = (t2 - t1) / 10000000.0;
-            if (PollingRate != 0)
+            ElapsedTime = (t2 - t1) / 10000000.0;
+            if (POLLING_RATE != 0)
             {
-                while (1.0 / elapsedTime > PollingRate)
+                while (1.0 / ElapsedTime > POLLING_RATE)
                 {
                     t2 = sw.ElapsedTicks;
-                    elapsedTime = (t2 - t1) / 10000000.0;
+                    ElapsedTime = (t2 - t1) / 10000000.0;
                 }
             }
             t1 = t2;
@@ -113,12 +146,15 @@ namespace DXRenderEngine
         {
             sw.Start();
             t1 = sw.ElapsedTicks;
-            while (Reference.Running)
+            while (reference.Running)
             {
-                GetMouseData();
-                GetKeys();
-                Reference.UserInput();
                 GetTime();
+                if (mouse.Acquire().Success && keyboard.Acquire().Success)
+                {
+                    GetMouseData();
+                    GetKeys();
+                    userInput();
+                }
             }
         }
 
@@ -142,14 +178,9 @@ namespace DXRenderEngine
             return FindChey(key).Raised;
         }
 
-        public Chey FindChey(Key key)
+        private Chey FindChey(Key key)
         {
-            for (int i = 0; i < cheyArray.Length; i++)
-            {
-                if (cheyArray[i].key == key)
-                    return cheyArray[i];
-            }
-            return null;
+            return cheyArray[(int)key];
         }
 
         public bool ButtonDown(int button)
@@ -172,22 +203,39 @@ namespace DXRenderEngine
             return buttons[button].Raised;
         }
 
-        public Vector2 GetDeltaMousePos()
+        public POINT GetDeltaMousePos()
         {
-            return DeltaMousePos;
+            return deltaMousePos;
         }
 
-        public Vector2 GetMousePos()
+        public POINT GetMousePos()
         {
-            return MousePos;
+            return mousePos;
         }
 
         public int GetDeltaMouseScroll()
         {
-            return DeltaMouseScroll;
+            return deltaMouseScroll;
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool boolean)
+        {
+            mouse.Unacquire();
+            mouse.Release();
+            keyboard.Unacquire();
+            keyboard.Release();
         }
 
         [DllImport("user32.dll")]
         private static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
     }
 }
