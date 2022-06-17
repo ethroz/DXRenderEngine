@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net6.0-windows</TargetFramework>
@@ -10,7 +10,8 @@
     <StartupObject>Program</StartupObject>
     <PlatformTarget>x64</PlatformTarget>
 	<UseWindowsForms>True</UseWindowsForms>
-	<UseWPF>True</UseWPF>
+	<UseWPF>False</UseWPF>
+	<ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,9 +23,7 @@
   <ItemGroup>
     <EmbeddedResource Include="DXRenderEngine\RayShaders.hlsl" />
     <EmbeddedResource Include="DXRenderEngine\RasterShaders.hlsl" />
-    <EmbeddedResource Include="Objects\Objects.obj">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-    </EmbeddedResource>
+    <EmbeddedResource Include="Objects\Objects.obj" />
   </ItemGroup>
 
   <ItemGroup>

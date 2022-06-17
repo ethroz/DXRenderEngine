@@ -1,31 +1,48 @@
 /////////////////////////////////////////
-//            Declarations             //
+//            Definitions              //
 /////////////////////////////////////////
 
 #define NUM_LIGHTS 1
+#define PI 3.14159265359f
+#define TWO_PI 6.28318530718f
+#define DEPTH_BIAS 2.0f
+#define NORMAL_BIAS 2.0f
+#define THIC 0.00001f
+#define ATMOSPHERE_DIR float3(0.0f, 1.0f, 0.0f)
+#define RED float3(1.0f, 0.0f, 0.0f)
+#define GREEN float3(0.0f, 1.0f, 0.0f)
+#define BLUE float3(0.0f, 0.0f, 1.0f)
+#define MAGENTA float3(1.0f, 0.0f, 1.0f)
+#define CYAN float3(0.0f, 1.0f, 1.0f)
+
+/////////////////////////////////////////
+//             Structures              //
+/////////////////////////////////////////
 
 struct VertexShaderInput
 {
-	float4 position : POSITION;
-	float4 normal : NORMAL;
-	float4 color : COLOR;
-	matrix worldMat : WORLDMATRIX;
-	matrix normalMat : INVERSETRANSPOSEWORLDMATRIX;
+	float3 position : POSITION;
+	float3 normal : NORMAL;
 };
 
 struct VertexShaderOutput
 {
 	float4 position : SV_POSITION;
-	float4 positionws : POSITION0;
-	float4 lightViewPosition : POSITION1;
-	float4 color : COLOR;
 	float3 normal : NORMAL;
+	float3 view : POSITION0;
+	float3 shadowRays[NUM_LIGHTS] : POSITION1;
+};
+
+struct GeometryInputType
+{
+	float4 position : SV_POSITION;
 };
 
 struct PixelInputType
 {
 	float4 position : SV_POSITION;
-	float4 depthPosition : POSITION;
+	float3 light : POSITION;
+	uint index : SV_RenderTargetArrayIndex;
 };
 
 struct PixelShaderOutput
@@ -52,6 +69,9 @@ struct Light
 	float radius;
 	float3 color;
 	float luminosity;
+	float res;
+	float far;
+	float2 padding;
 };
 
 /////////////////////////////////////////
@@ -59,17 +79,17 @@ struct Light
 /////////////////////////////////////////
 
 Texture2D ShaderTexture : register(t0);
-Texture2D DepthTexture : register(t1);
+TextureCube ShadowTextures[NUM_LIGHTS] : register(t1);
 SamplerState ColorSampler : register(s0);
-SamplerState DepthSampler : register(s1);
+SamplerComparisonState DepthSampler : register(s1);
 
 cbuffer PerApplication : register(b0)
 {
 	matrix ProjectionMatrix;
+	float3 LowerAtmosphere;
 	uint Width;
+	float3 UpperAtmosphere;
 	uint Height;
-	float2 padding;
-	Light Lights[NUM_LIGHTS];
 };
 
 cbuffer PerFrame : register(b1)
@@ -77,16 +97,45 @@ cbuffer PerFrame : register(b1)
 	matrix ViewMatrix;
 	float3 EyePos;
 	float ModdedTime;
+	Light Lights[NUM_LIGHTS];
 }
 
 cbuffer PerLight : register(b2)
 {
-	matrix LightProjectionMatrix;
+	matrix LightMatrices[6];
+	uint index;
+	float DepthBias;
+	float NormalBias;
+	bool Line;
+}
+
+cbuffer PerObject : register(b3)
+{
+	// Object matrices
+	matrix worldMat;
+	matrix normalMat;
+	// Material stuff
+	float3 diffuse; // kd; ka = kd * atmosphere
+	float rough; // sqrt(alpha)
+	float3 spec; // ks
+	float shine; // s
+	float ior; // IOR
+	float3 padding2;
 }
 
 /////////////////////////////////////////
 //              Methods                //
 /////////////////////////////////////////
+
+float square(float value)
+{
+	return value * value;
+}
+
+float Pow5(float value)
+{
+	return value * value * value * value * value;
+}
 
 float rand(float2 p)
 {
@@ -102,99 +151,166 @@ float random(float2 p)
 	return rand(p.xy * (rand(p.xy * ModdedTime) - rand(rand(p.xy * ModdedTime) - ModdedTime)));
 }
 
+float lengthSqr(float3 vec)
+{
+	return vec.x * vec.x + vec.y * vec.y + vec.z * vec.z;
+}
+
 float luminance(float3 v)
 {
 	return 0.2126f * v.r + 0.7152f * v.g + 0.0722f * v.b;
 }
 
+float NormalDistribution(float alpha, float3 normal, float3 middle)
+{
+	// GGX
+	float ndotm = dot(normal, middle);
+	if (ndotm <= 0.0f)
+	{
+		return 0.0f;
+	}
+	float dotSqr = square(ndotm);
+	float alphaSqr = square(alpha);
+	return alphaSqr / (PI * square(dotSqr * (alphaSqr + (1.0f - dotSqr) / dotSqr)));
+}
+
+float Geometric(float3 view, float3 light, float3 middle, float3 normal, float alpha)
+{
+	// GGX
+	float vdotm = dot(view, middle);
+	float vdotn = dot(view, normal);
+	float ldotm = dot(light, middle);
+	float ldotn = dot(light, normal);
+	if (vdotm / vdotn <= 0.0f || ldotm / ldotn <= 0.0f)
+	{
+		return 0.0f;
+	}
+	else
+	{
+		float alphaSqr = square(alpha);
+		float vDotSqr = square(vdotn);
+		float lDotSqr = square(ldotn);
+		return 4.0f / (1.0f + sqrt(1.0f + alphaSqr * (1.0f - vDotSqr) / vDotSqr)) / (1.0f + sqrt(1.0f + alphaSqr * (1.0f - lDotSqr) / lDotSqr));
+	}
+}
+
+float Fresnel(float ior, float3 view, float3 middle)
+{
+	// Schlick’s Approximation
+	float F0 = square(ior - 1.0f) / square(ior + 1.0f);
+	return F0 + (1.0f - F0) * Pow5(1.0f - dot(view, middle));
+}
+
+
 /////////////////////////////////////////
 //        Shader Entry Points          //
 /////////////////////////////////////////
 
-// shadow rasterizer
-PixelInputType shadowVertexShader(VertexShaderInput In)
+// shadow map rasterizer
+GeometryInputType shadowVertexShader(VertexShaderInput In)
 {
-	PixelInputType Out;
-	Out.position = mul(In.worldMat, In.position);
-	Out.position = mul(LightProjectionMatrix, Out.position);
-	Out.depthPosition = Out.position;
-	return Out;
+	return (GeometryInputType)mul(worldMat, float4(In.position, 1.0f));
 }
 
-float shadowPixelShader(PixelInputType In) : SV_TARGET
+[maxvertexcount(18)]
+void shadowGeometryShader(triangle GeometryInputType In[3], inout TriangleStream<PixelInputType> triStream)
 {
-	return In.depthPosition.z / In.depthPosition.w;
+	[unroll]
+	for (uint i = 0; i < 6; ++i)
+	{
+		[unroll]
+		for (uint j = 0; j < 3; ++j)
+		{
+			PixelInputType Out;
+			Out.position = mul(LightMatrices[i], In[j].position);
+			Out.light = In[j].position.xyz - Lights[index].position;
+			Out.index = i;
+			triStream.Append(Out);
+		}
+		triStream.RestartStrip();
+	}
 }
 
-// gpu rasterizer
+float shadowPixelShader(PixelInputType In) : SV_DEPTH
+{
+	return length(In.light) / Lights[index].far;
+}
+
+// object lighting rasterizer
 VertexShaderOutput vertexShader(VertexShaderInput In)
 {
 	VertexShaderOutput Out;
-	Out.positionws = mul(In.worldMat, In.position);
-	Out.position = mul(ViewMatrix, Out.positionws);
-	Out.positionws.w = Out.position.z;
+	Out.position = mul(worldMat, float4(In.position, 1.0f));
+	//Out.view = EyePos - Out.position.xyz;
+	Out.view = Out.position.xyz;
+	[unroll]
+	for (uint i = 0; i < NUM_LIGHTS; ++i)
+	{
+		Out.shadowRays[i] = Out.position.xyz - Lights[i].position;
+	}
+	Out.position = mul(ViewMatrix, Out.position);
 	Out.position = mul(ProjectionMatrix, Out.position);
-	Out.lightViewPosition = mul(LightProjectionMatrix, In.position);
-	Out.normal = normalize(mul((float3x3)In.normalMat, In.normal.xyz));
-	Out.color = In.color;
-	return Out;
-}
-
-PixelShaderOutput lightingPixelShader(VertexShaderOutput In)
-{
-	PixelShaderOutput Out;
-	Out.depth = In.position.z;
-	float col = ShaderTexture.Sample(ColorSampler, In.position.xy / float2(Width, Height)).r;
-	Out.color = float4(col, col, col, In.positionws.w);
-	float2 projectTexCoord;
-	projectTexCoord.x = 0.5f + (In.lightViewPosition.x / In.lightViewPosition.w * 0.5f);
-	projectTexCoord.y = 0.5f - (In.lightViewPosition.y / In.lightViewPosition.w * 0.5f);
-
-	// Determine if the projected coordinates are in the 0 to 1 range.  If so then this pixel is in the view of the light.
-	if ((saturate(projectTexCoord.x) == projectTexCoord.x) && (saturate(projectTexCoord.y) == projectTexCoord.y))
-	{
-		float depthValue = DepthTexture.Sample(DepthSampler, projectTexCoord).x;
-		float lightDepthValue = In.lightViewPosition.z / In.lightViewPosition.w;
-		lightDepthValue -= 0.01f;
-
-		if (lightDepthValue < depthValue)
-		{
-			Out.color.rgb += 1.0f;
-		}
-	}
-	return Out;
-}
-
-PixelShaderOutput pixelShader2(VertexShaderOutput In)
-{
-	PixelShaderOutput Out;
-	Out.depth = In.position.z;
-	Out.color = float4(0.0f, 0.0f, 0.0f, In.positionws.w);
-	In.normal = normalize(In.normal);
-	float4 col = ShaderTexture.Sample(ColorSampler, In.position.xy / float2(Width, Height));
-	if ((col.r == 0.0f && col.g == 0.0f && col.b == 0.0f))
-		return Out;
-	for (uint i = 0; i < NUM_LIGHTS; i++)
-	{
-		float3 toLight = Lights[i].position - In.positionws.xyz;
-		if (dot(In.normal, toLight) > 0)
-		{
-			float len = length(toLight);
-			toLight /= len;
-			float brightness = Lights[i].luminosity / (len * len);
-			Out.color.rgb += In.color.xyz * Lights[i].color * brightness * saturate(dot(In.normal, toLight));
-			float3 reflectionVector = normalize(reflect(In.positionws.xyz - EyePos, In.normal));
-			Out.color.rgb += pow(saturate(dot(reflectionVector, toLight)), pow(2, In.color.w * 12.0f + 1.0f)) * brightness;
-		}
-	}
-	Out.color.rgb *= col.rgb;
+	Out.normal = mul((float3x3)normalMat, In.normal);
 	return Out;
 }
 
 PixelShaderOutput pixelShader(VertexShaderOutput In)
 {
 	PixelShaderOutput Out;
-	Out.depth = In.position.z;
+	Out.depth = In.position.z; // output depth is screenspace depth
+	Out.color = float4(0.0f, 0.0f, 0.0f, In.position.w); // post process uses alpha for real depth
+	In.normal = normalize(In.normal); // Normalize the input normal
+
+	// all light calculations
+	[unroll]
+	for (uint i = 0; i < NUM_LIGHTS; ++i)
+	{
+		// Depth calculations
+		float depth = length(In.shadowRays[i]);
+		float3 lightDir = -In.shadowRays[i] / depth; // normalize and flip the shadowRay to get the lightDir;
+		// bias
+		float cosTheta = dot(In.normal, lightDir);
+		float theta = acos(cosTheta) / PI * 180.0f;
+		//if (Line && abs(theta - NormalBias) < 0.001f) // select normal
+		//if (Line && (abs(theta - NormalBias) < 0.001f || abs(abs(In.view.x) - abs(In.view.z)) < 0.001f)) // xz plane x, select normal
+		//if (Line && (abs(theta - NormalBias) < THIC || abs(abs(In.view.x) - abs(In.view.z)) < THIC || abs(abs(In.view.x) - abs(In.view.y)) < THIC || abs(abs(In.view.y) - abs(In.view.z)) < THIC)) // 3d x, select normal
+		if (Line && (abs(sqrt(square(In.view.x) + square(In.view.y)) - abs(In.view.z)) < THIC || lengthSqr(In.view) < THIC / 100.0f)) // z-cone x with dot
+		//if (Line && abs(sqrt(square(In.view.x) + square(In.view.y)) - abs(In.view.z)) < THIC) // x no dot
+		{
+			Out.color.rgb = RED;
+			return Out;
+		}
+
+		//float cosTheta = dot(In.normal, lightDir);
+		//if (cosTheta < 0.0f) // we don't want bias behind shadows.
+		//{
+		//	cosTheta = 1.0f;
+		//}
+		//float bias = tan(acos(cosTheta)) / Lights[i].res;
+		//float bias = (DepthBias + NormalBias * tan(acos(cosTheta))) / Lights[i].res;
+		//bias = clamp(bias, 0.0f, 0.01f);
+		//float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far - bias);
+		float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far - DepthBias / Lights[i].res);
+		Out.color.rgb = shadow >= 1.0f ? 1.0f : 0.0f;
+		return Out;
+		//float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far);
+
+		// Color calculations
+		float lamb = dot(lightDir, In.normal);
+		if (lamb > 0.0f)
+		{
+			// Cook-Torrance BRDF model
+			float3 viewDir = normalize(In.view);
+			float alpha = square(rough);
+			float3 middle = normalize(lightDir + viewDir);
+			float D = NormalDistribution(alpha, In.normal, middle);
+			float G = Geometric(viewDir, lightDir, middle, In.normal, alpha);
+			float F = Fresnel(ior, viewDir, middle);
+			float rs = D * G * F / (4.0f * dot(In.normal, viewDir));
+			Out.color.rgb += Lights[i].color * shadow * (lamb * (1.0f - shine) * diffuse + shine * rs * spec);
+		}
+	}
+
 	return Out;
 }
 

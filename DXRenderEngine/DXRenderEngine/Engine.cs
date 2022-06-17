@@ -9,19 +9,17 @@ using Vortice.Direct3D11;
 using Vortice.DXGI;
 using System.Windows.Forms;
 using Vortice.Mathematics;
-using Size = System.Drawing.Size;
 using System.Runtime.InteropServices;
 using Vortice.D3DCompiler;
 using System.Text;
 using System.Reflection;
 
-/// <summary>
-/// ToDo
-///     make it work lmao
-/// </summary>
-
 namespace DXRenderEngine;
 
+/// <summary>
+/// ToDo
+///     full screen
+/// </summary>
 public class Engine : IDisposable
 {
     // Graphics Fields and Properties
@@ -29,14 +27,13 @@ public class Engine : IDisposable
     protected Form window;
     private IDXGIFactory5 factory;
     private IDXGIAdapter4 adapter;
+    private IDXGIOutput output;
     protected ID3D11Device5 device;
     protected ID3D11DeviceContext3 context;
     protected IDXGISwapChain4 swapChain;
     protected ID3D11RenderTargetView1 renderTargetView;
-    protected VertexPositionNormalColor[] vertices;
-    protected ObjectInstance[] instances;
+    protected VertexPositionNormal[] vertices;
     protected ID3D11Buffer vertexBuffer;
-    protected ID3D11Buffer instanceBuffer;
     protected ID3D11VertexShader vertexShader;
     protected ID3D11PixelShader pixelShader;
     protected Viewport screenViewport;
@@ -46,18 +43,17 @@ public class Engine : IDisposable
     protected string shaderCode;
     protected readonly string vertexShaderEntry;
     protected readonly string pixelShaderEntry;
-    protected PackedLight[] packedLights;
 
     // Controllable Graphics Settings
     public int Width 
     { 
         get => window.ClientSize.Width;
-        private set => window.BeginInvoke(() => window.ClientSize = new Size(value, window.ClientSize.Height));
+        private set => window.BeginInvoke(() => window.ClientSize = new(value, window.ClientSize.Height));
     }
     public int Height
     {
         get => window.ClientSize.Height;
-        private set => window.BeginInvoke(() => window.ClientSize = new Size(window.ClientSize.Width, value));
+        private set => window.BeginInvoke(() => window.ClientSize = new(window.ClientSize.Width, value));
     }
 
     // Time Fields
@@ -67,69 +63,64 @@ public class Engine : IDisposable
     private const long MILLISECONDS_FOR_RESET = 1000;
     private long startFPSTime;
     private long lastReset = 0;
-    public List<double> allFPSList { get; private set; }
-    public List<double> allTimeList { get; private set; }
     private double avgFPS = 0.0, minFPS = double.PositiveInfinity, maxFPS = 0.0;
     public long frameCount { get; private set; }
 
     // Engine Fields
     public IntPtr Handle => window.Handle;
     public bool Running { get; private set; }
-    private Action OnAwake, OnStart, OnUpdate, UserInput;
-    public const float DEG2RAD = (float)Math.PI / 180.0f;
+    private Action Setup, Start, Update, UserInput;
+    public const double DEG2RAD = Math.PI / 180.0;
     public bool Focused { get; private set; }
     public readonly Input input;
-    private Thread renderThread, controlThread;
-    protected readonly Vector3 BGCol = new Vector3();
-    protected readonly float MinBrightness = 0.1f;
+    private Thread renderThread, controlsThread, debugThread;
+    private bool printMessages = true;
+    private static Queue<string> messages = new Queue<string>();
+    protected readonly Vector3 LowerAtmosphere = new(0.0f, 0.0f, 0.0f);
+    protected readonly Vector3 UpperAtmosphere = new Vector3(1.0f, 1.0f, 1.0f) * 0.0f;
     public readonly List<Gameobject> gameobjects = new List<Gameobject>();
     public readonly List<Light> lights = new List<Light>();
     public Vector3 EyePos;
     public Vector3 EyeRot;
-
-    private const bool UseCache = true;
+    public Vector3 EyeStartPos;
+    public Vector3 EyeStartRot;
+    public float DepthBias = 0.0f;
+    public float NormalBias = 0.0f;
+    public bool Line = true;
 
     public Engine(EngineDescription desc)
     {
+        print("Construction");
         Description = desc;
-        OnAwake = desc.OnAwake;
-        OnStart = desc.OnStart;
-        OnUpdate = desc.OnUpdate;
+        Setup = desc.Setup;
+        Start = desc.Start;
+        Update = desc.Update;
         UserInput = desc.UserInput;
         vertexShaderEntry = "vertexShader";
         pixelShaderEntry = "pixelShader";
         inputElements = new InputElementDescription[]
         {
-            new InputElementDescription("POSITION", 0, Format.R32G32B32A32_Float, 0, 0, InputClassification.PerVertexData, 0),
-            new InputElementDescription("NORMAL", 0, Format.R32G32B32A32_Float, 16, 0, InputClassification.PerVertexData, 0),
-            new InputElementDescription("COLOR", 0, Format.R32G32B32A32_Float, 32, 0, InputClassification.PerVertexData, 0),
-            new InputElementDescription("WORLDMATRIX", 0, Format.R32G32B32A32_Float, 0, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("WORLDMATRIX", 1, Format.R32G32B32A32_Float, 16, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("WORLDMATRIX", 2, Format.R32G32B32A32_Float, 32, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("WORLDMATRIX", 3, Format.R32G32B32A32_Float, 48, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("INVERSETRANSPOSEWORLDMATRIX", 0, Format.R32G32B32A32_Float, 64, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("INVERSETRANSPOSEWORLDMATRIX", 1, Format.R32G32B32A32_Float, 80, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("INVERSETRANSPOSEWORLDMATRIX", 2, Format.R32G32B32A32_Float, 96, 1, InputClassification.PerInstanceData, 1),
-            new InputElementDescription("INVERSETRANSPOSEWORLDMATRIX", 3, Format.R32G32B32A32_Float, 112, 1, InputClassification.PerInstanceData, 1),
+            new("POSITION", 0, Format.R32G32B32_Float, 0, 0, InputClassification.PerVertexData, 0),
+            new("NORMAL", 0, Format.R32G32B32_Float, 12, 0, InputClassification.PerVertexData, 0),
         };
 
-        sw = new Stopwatch();
+        sw = new();
         sw.Start();
-        allFPSList = new List<double>();
-        allTimeList = new List<double>();
 
         Application.EnableVisualStyles();
 
-        window = new Form()
+        window = new()
         {
             Text = "DXRenderEngine",
-            ClientSize = new Size(desc.Width, desc.Height),
+            ClientSize = new(desc.Width, desc.Height),
             FormBorderStyle = FormBorderStyle.Fixed3D,
             BackColor = System.Drawing.Color.Black,
-            WindowState = desc.WindowState
+            WindowState = desc.WindowState,
+            StartPosition = FormStartPosition.Manual,
+            Location = new System.Drawing.Point(630, 250)
         };
 
-        input = new Input(window.Handle, this, UserInput);
+        input = new(window.Handle, this, UserInput);
 
         window.Load += Window_Load;
         window.Shown += Window_Shown;
@@ -140,34 +131,35 @@ public class Engine : IDisposable
         window.FormClosing += Closing;
     }
 
+    internal void SetShaderCode(string code)
+    {
+        shaderCode = code;
+    }
+
     public void Run()
     {
+        print("Running");
         Application.Run(window);
+        printMessages = false;
+        debugThread?.Join();
     }
 
     protected virtual void InitializeDeviceResources()
     {
         DeviceCreationFlags flags = DeviceCreationFlags.None;
+        bool debug = false;
 #if DEBUG
-        flags = DeviceCreationFlags.Debug;
+        flags |= DeviceCreationFlags.Debug;
+        debug = true;
 #endif
         D3D11.D3D11CreateDevice(null, DriverType.Hardware, flags, new FeatureLevel[] { FeatureLevel.Level_11_1 }, out ID3D11Device device0);
-        device = new ID3D11Device5(device0.NativePointer);
+        device = new(device0.NativePointer);
         context = device.ImmediateContext3;
-        factory = device.QueryInterface<IDXGIDevice>().GetParent<IDXGIAdapter>().GetParent<IDXGIFactory5>();
-        adapter = new IDXGIAdapter4(factory.GetAdapter1(0).NativePointer);
+        DXGI.CreateDXGIFactory2(debug, out factory);
+        adapter = new(factory.GetAdapter(0).NativePointer);
 
-        SwapChainDescription1 scd = new SwapChainDescription1()
-        {
-            BufferCount = 2,
-            Format = Format.R8G8B8A8_UNorm,
-            Height = Height,
-            Width = Width,
-            SampleDescription = new SampleDescription(1, 0),
-            SwapEffect = SwapEffect.FlipDiscard,
-            BufferUsage = Usage.RenderTargetOutput
-        };
-        swapChain = new IDXGISwapChain4(factory.CreateSwapChainForHwnd(device, window.Handle, scd).NativePointer);
+        SwapChainDescription1 scd = new(Width, Height/*, Format.R8G8B8A8_UNorm*/);
+        swapChain = new(factory.CreateSwapChainForHwnd(device, window.Handle, scd).NativePointer);
 
         AssignRenderTarget();
 
@@ -182,7 +174,7 @@ public class Engine : IDisposable
     {
         using (ID3D11Texture2D1 backBuffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
             renderTargetView = device.CreateRenderTargetView1(backBuffer);
-        screenViewport = new Viewport(0, 0, Width, Height);
+        screenViewport = new(0, 0, Width, Height);
         context.RSSetViewport(screenViewport);
     }
 
@@ -190,44 +182,41 @@ public class Engine : IDisposable
     {
         PackVertices();
 
-        BufferDescription bd = new BufferDescription(vertices.Length * Marshal.SizeOf<VertexPositionNormalColor>(), BindFlags.VertexBuffer);
+        BufferDescription bd = new(vertices.Length * Marshal.SizeOf<VertexPositionNormal>(), BindFlags.VertexBuffer);
         vertexBuffer = device.CreateBuffer(vertices, bd);
-        bd = new BufferDescription(instances.Length * Marshal.SizeOf<ObjectInstance>(), BindFlags.VertexBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
-        instanceBuffer = device.CreateBuffer(instances, bd);
-        VertexBufferView[] views = new VertexBufferView[2];
-        views[0] = new VertexBufferView(vertexBuffer, Marshal.SizeOf<VertexPositionNormalColor>());
-        views[1] = new VertexBufferView(instanceBuffer, Marshal.SizeOf<ObjectInstance>());
-        context.IASetVertexBuffers(0, views);
+        VertexBufferView view = new(vertexBuffer, Marshal.SizeOf<VertexPositionNormal>());
+        context.IASetVertexBuffer(0, view);
     }
 
     protected virtual void PackVertices()
     {
+        // need to calculate vertex count first.
         int vertexCount = 0;
         for (int i = 0; i < gameobjects.Count; i++)
         {
-            gameobjects[i].VerticesOffset = vertexCount;
+            gameobjects[i].Offset = vertexCount;
             vertexCount += gameobjects[i].Triangles.Length * 3;
         }
-        vertices = new VertexPositionNormalColor[vertexCount];
-        instances = new ObjectInstance[gameobjects.Count];
+        vertices = new VertexPositionNormal[vertexCount];
+
+        // then pack all the vertices
         for (int i = 0; i < gameobjects.Count; i++)
         {
             for (int j = 0; j < gameobjects[i].Triangles.Length; j++)
             {
-                vertices[gameobjects[i].VerticesOffset + j * 3] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(0);
-                vertices[gameobjects[i].VerticesOffset + j * 3 + 1] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(1);
-                vertices[gameobjects[i].VerticesOffset + j * 3 + 2] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(2);
+                vertices[gameobjects[i].Offset + j * 3] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(0);
+                vertices[gameobjects[i].Offset + j * 3 + 1] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(1);
+                vertices[gameobjects[i].Offset + j * 3 + 2] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(2);
             }
-            instances[i] = new ObjectInstance(gameobjects[i].World, gameobjects[i].Normal);
         }
     }
 
     protected virtual void UpdateShaderConstants()
     {
         if (lights.Count == 0)
-            lights.Add(new Light());
+            lights.Add(new());
         if (gameobjects.Count == 0)
-            gameobjects.Add(new Gameobject());
+            gameobjects.Add(new());
     }
 
     protected void ChangeShader(string target, string newValue)
@@ -235,7 +224,7 @@ public class Engine : IDisposable
         int index = shaderCode.IndexOf(target);
         if (index == -1)
         {
-            throw new Exception(target + " does not exist");
+            throw new(target + " does not exist in shaderCode");
         }
 
         shaderCode = shaderCode.Replace(target, newValue);
@@ -253,7 +242,7 @@ public class Engine : IDisposable
 #endif
 
         Blob shaderBlob;
-        if (UseCache && File.Exists(vertexShaderFile))
+        if (Description.UseShaderCache && File.Exists(vertexShaderFile))
         {
             shaderBlob = Compiler.ReadFileToBlob(vertexShaderFile);
         }
@@ -261,8 +250,9 @@ public class Engine : IDisposable
         {
             Compiler.Compile(shaderCode, null, null, vertexShaderEntry, "VertexShader", "vs_5_0", sf, out shaderBlob, out Blob errorCode);
             if (shaderBlob == null)
-                throw new Exception("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
+                throw new("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
 
+            errorCode?.Dispose();
             Compiler.WriteBlobToFile(shaderBlob, vertexShaderFile, true);
         }
 
@@ -274,7 +264,7 @@ public class Engine : IDisposable
 
         shaderBlob.Dispose();
 
-        if (UseCache && File.Exists(pixelShaderFile))
+        if (Description.UseShaderCache && File.Exists(pixelShaderFile))
         {
             shaderBlob = Compiler.ReadFileToBlob(pixelShaderFile);
         }
@@ -282,8 +272,9 @@ public class Engine : IDisposable
         {
             Compiler.Compile(shaderCode, null, null, pixelShaderEntry, "PixelShader", "ps_5_0", sf, out shaderBlob, out Blob errorCode);
             if (shaderBlob == null)
-                throw new Exception("HLSL pixel shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
+                throw new("HLSL pixel shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
 
+            errorCode?.Dispose();
             Compiler.WriteBlobToFile(shaderBlob, pixelShaderFile, true);
         }
 
@@ -297,16 +288,8 @@ public class Engine : IDisposable
 
     protected virtual void SetConstantBuffers()
     {
-    }
-
-    protected void PackLights()
-    {
-        packedLights = new PackedLight[lights.Count];
-
-        for (int i = 0; i < lights.Count; i++)
-        {
-            packedLights[i] = lights[i].Pack();
-        }
+        EyeStartPos = EyePos;
+        EyeStartRot = EyeRot;
     }
 
     private void GetTime()
@@ -326,8 +309,6 @@ public class Engine : IDisposable
         maxFPS = Math.Max(fps, maxFPS);
         minFPS = Math.Min(fps, minFPS);
         frameCount++;
-        allFPSList.Add(fps);
-        allTimeList.Add(sw.ElapsedTicks / 10000000.0);
 
         // reset counters
         if (sw.ElapsedMilliseconds / MILLISECONDS_FOR_RESET > lastReset)
@@ -336,7 +317,7 @@ public class Engine : IDisposable
             startFPSTime = sw.ElapsedTicks;
             string text = "DXRenderEngine   " + avgFPS.ToString("G4") +
             "fps (" + minFPS.ToString("G4") + "fps, " + maxFPS.ToString("G4") + "fps)";
-            window.BeginInvoke(new Action(() => window.Text = text));
+            window.BeginInvoke(new(() => window.Text = text));
             maxFPS = 0.0;
             minFPS = double.PositiveInfinity;
             frameCount = 0;
@@ -378,11 +359,76 @@ public class Engine : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    // subclasses should always dispose this last
     protected virtual void Dispose(bool boolean)
     {
         Stop();
         input.Dispose();
+        inputLayout.Dispose();
+        pixelShader.Dispose();
+        vertexShader.Dispose();
+        vertexBuffer.Dispose();
+        renderTargetView.Dispose();
+        swapChain.Dispose();
+        context.Dispose();
+        output?.Dispose();
+        adapter.Dispose();
+        device.Dispose();
         window.Dispose();
+    }
+
+    private void GetRefCounts()
+    {
+        Type type = GetType();
+        uint total = 0;
+
+        print("Directx objects:");
+        foreach (var mem in type.GetFields(BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            string mType = mem.FieldType.ToString();
+            if (mType.Contains("IDXGI") || mType.Contains("ID3D11"))
+            {
+                var dxObj = mem.GetValue(this);
+
+                if (dxObj is null)
+                {
+                    continue;
+                }
+                else if (dxObj is SharpGen.Runtime.ComObject)
+                {
+                    SharpGen.Runtime.ComObject comObject = (SharpGen.Runtime.ComObject)dxObj;
+                    if (comObject.NativePointer == IntPtr.Zero)
+                    {
+                        continue;
+                    }
+                    comObject.AddRef();
+                    uint count = comObject.Release();
+                    total += count;
+                    print(mem.Name + " Ref#: " + count);
+                }
+                else if (dxObj is Array && ((Array)dxObj).GetValue(0) is SharpGen.Runtime.ComObject)
+                {
+                    Array arr = (Array)dxObj;
+                    if (arr == null)
+                    {
+                        continue;
+                    }
+                    for (int i = 0; i < arr.Length; i++)
+                    {
+                        SharpGen.Runtime.ComObject comObject = (SharpGen.Runtime.ComObject)arr.GetValue(i);
+                        if (comObject.NativePointer == IntPtr.Zero)
+                        {
+                            continue;
+                        }
+                        comObject.AddRef();
+                        uint count = comObject.Release();
+                        total += count;
+                        print(mem.Name + "[" + i + "] Ref#: " + count);
+                    }
+                }
+            }
+        }
+        print("Total Refs: " + total);
     }
 
     /////////////////////////////////////
@@ -391,13 +437,45 @@ public class Engine : IDisposable
     {
         while (Running)
         {
+            long c1 = sw.ElapsedTicks;
             GetTime();
-            if (window.WindowState == FormWindowState.Minimized)
-                return;
+            if (!Focused)
+                continue;
+            long c2 = sw.ElapsedTicks;
             Render();
-            OnUpdate();
+            long c3 = sw.ElapsedTicks;
+            Update();
+            long c4 = sw.ElapsedTicks;
             PerFrameUpdate();
+            long c5 = sw.ElapsedTicks;
             swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
+            long c6 = sw.ElapsedTicks;
+            //print("GetTime:" + (c2 - c1) + " Render:" + (c3 - c2) + " Update:" + (c4 - c3) + " Frame:" + (c5 - c4) + " Present:" + (c6 - c5));
+        }
+    }
+
+    private void DebugLoop()
+    {
+        long t1 = sw.ElapsedTicks;
+        long t2 = t1;
+        while (printMessages)
+        {
+            // frame limiter
+            while (10000000.0 / (t2 - t1) > 144.0)
+            {
+                t2 = sw.ElapsedTicks;
+            }
+
+            // message printer
+            if (messages.Count > 0)
+            {
+                string output = "";
+                while (messages.Count > 0)
+                {
+                    output += messages.Dequeue() + "\n";
+                }
+                Debug.Write(output);
+            }
         }
     }
 
@@ -411,17 +489,21 @@ public class Engine : IDisposable
 
     protected virtual void PerFrameUpdate()
     {
+        // objects can only move in between frames
         for (int i = 0; i < gameobjects.Count; i++)
         {
             gameobjects[i].CreateMatrices();
-            instances[i] = gameobjects[i].GetInstance();
         }
+    }
 
-        // update object matrices
-        MappedSubresource resource = context.Map(instanceBuffer, MapMode.WriteNoOverwrite);
-        IntPtr pointer = resource.DataPointer;
-        WriteStructArray(instances, ref pointer);
-        context.Unmap(instanceBuffer);
+    protected virtual void PerLightUpdate(int index)
+    {
+
+    }
+
+    protected virtual void PerObjectUpdate(int index)
+    {
+
     }
 
     protected virtual void Render()
@@ -433,6 +515,51 @@ public class Engine : IDisposable
 
     /////////////////////////////////////
 
+    private void Window_Load(object sender, EventArgs e)
+    {
+        print("Loading");
+        if (shaderCode == null)
+        {
+            throw new("shader code is null");
+        }
+        Running = true;
+        Setup();
+        InitializeDeviceResources();
+        GetDisplayRefreshRate();
+        InitializeVertices();
+        Start();
+        PerApplicationUpdate();
+    }
+
+    private void Window_Shown(object sender, EventArgs e)
+    {
+        print("Shown");
+        input.InitializeInputs();
+
+        controlsThread = new(() => input.ControlLoop());
+        renderThread = new(() => RenderLoop());
+#if DEBUG
+        debugThread = new(() => DebugLoop());
+#endif
+
+        GC.Collect();
+
+        t1 = startFPSTime = sw.ElapsedTicks;
+        renderThread.Start();
+        controlsThread.Start();
+        debugThread?.Start();
+    }
+
+    private void Closing(object sender, FormClosingEventArgs e)
+    {
+        print("Closing");
+        Running = false;
+        renderThread.Join();
+        controlsThread.Join();
+
+        Dispose();
+    }
+
     private void LostFocus(object sender, EventArgs e)
     {
         Focused = false;
@@ -441,15 +568,6 @@ public class Engine : IDisposable
     private void GotFocus(object sender, EventArgs e)
     {
         Focused = true;
-    }
-
-    private void Closing(object sender, FormClosingEventArgs e)
-    {
-        Running = false;
-        renderThread.Join();
-        controlThread.Join();
-
-        Dispose();
     }
 
     private void Window_Resize(object sender, EventArgs e)
@@ -464,47 +582,40 @@ public class Engine : IDisposable
         Resize();
     }
 
-    private void Window_Load(object sender, EventArgs e)
-    {
-        if (shaderCode == null)
-        {
-            throw new ArgumentNullException("shader code");
-        }
-        Running = true;
-        OnAwake();
-        InitializeDeviceResources();
-        GetDisplayRefreshRate();
-        InitializeVertices();
-        OnStart();
-        PerApplicationUpdate();
-    }
-
-    private void Window_Shown(object sender, EventArgs e)
-    {
-        input.InitializeInputs();
-
-        controlThread = new Thread(() => input.ControlLoop());
-        renderThread = new Thread(() => RenderLoop());
-
-        t1 = startFPSTime = sw.ElapsedTicks;
-        renderThread.Start();
-        controlThread.Start();
-    }
-
     private void GetDisplayRefreshRate()
     {
         int num = 0;
+        int main = -1;
+        List<IDXGIOutput> outputs = new List<IDXGIOutput>();
         while (true)
         {
-            var output = adapter.GetOutput(num);
+            outputs.Add(adapter.GetOutput(num));
             if (output == null)
                 break;
             var modes = output.GetDisplayModeList(Format.R8G8B8A8_UNorm, DisplayModeEnumerationFlags.DisabledStereo);
             foreach (var mode in modes)
             {
-                displayRefreshRate = Math.Max(displayRefreshRate, mode.RefreshRate.Numerator / (float)mode.RefreshRate.Denominator);
+                float temp = mode.RefreshRate.Numerator / (float)mode.RefreshRate.Denominator;
+                if (temp > displayRefreshRate)
+                {
+                    displayRefreshRate = temp;
+                    main = num;
+                }
             }
             num++;
+            output.Release();
+        }
+
+        for (int i = 0; i < outputs.Count; i++)
+        {
+            if (i == main)
+            {
+                output = outputs[i];
+            }
+            else
+            {
+                outputs[i].Release();
+            }
         }
     }
 
@@ -527,38 +638,6 @@ public class Engine : IDisposable
             Marshal.StructureToPtr(data[i], pointer, true);
             pointer += Marshal.SizeOf<T>();
         }
-    }
-
-    public static Matrix4x4 CreateView(Vector3 pos, Vector3 rot)
-    {
-        Matrix4x4 rotation = CreateRotation(rot);
-        Vector3 xaxis = Vector3.TransformNormal(Vector3.UnitX, rotation);
-        Vector3 yaxis = Vector3.TransformNormal(Vector3.UnitY, rotation);
-        Vector3 zaxis = Vector3.TransformNormal(Vector3.UnitZ, rotation);
-
-        Matrix4x4 result = Matrix4x4.Identity;
-        result.M11 = xaxis.X;
-        result.M21 = xaxis.Y;
-        result.M31 = xaxis.Z;
-        result.M12 = yaxis.X;
-        result.M22 = yaxis.Y;
-        result.M32 = yaxis.Z;
-        result.M13 = zaxis.X;
-        result.M23 = zaxis.Y;
-        result.M33 = zaxis.Z;
-        result.M41 = -Vector3.Dot(xaxis, pos);
-        result.M42 = -Vector3.Dot(yaxis, pos);
-        result.M43 = -Vector3.Dot(zaxis, pos);
-
-        return result;
-    }
-
-    public static Matrix4x4 CreateRotation(Vector3 rot)
-    {
-        Matrix4x4 rotx = CreateRotationX(rot.X);
-        Matrix4x4 roty = CreateRotationY(rot.Y);
-        //Matrix4x4 rotz = CreateRotationZ(rot.Z);
-        return rotx * roty;
     }
 
     private static Matrix4x4 CreateRotationX(float angle)
@@ -591,8 +670,8 @@ public class Engine : IDisposable
 
     private static Matrix4x4 CreateRotationZ(float angle)
     {
-        float cos = (float)Math.Cos(angle * DEG2RAD);
-        float sin = (float)Math.Sin(angle * DEG2RAD);
+        float cos = (float)Math.Cos(-angle * DEG2RAD);
+        float sin = (float)Math.Sin(-angle * DEG2RAD);
 
         Matrix4x4 result = Matrix4x4.Identity;
         result.M11 = cos;
@@ -603,41 +682,68 @@ public class Engine : IDisposable
         return result;
     }
 
+    public static Matrix4x4 CreateRotation(Vector3 rot)
+    {
+        Matrix4x4 rotx = CreateRotationX(rot.X);
+        Matrix4x4 roty = CreateRotationY(rot.Y);
+        Matrix4x4 rotz = CreateRotationZ(rot.Z);
+        return rotz * rotx * roty;
+    }
+
     public static Matrix4x4 CreateWorld(Vector3 pos, Vector3 rot, Vector3 sca)
     {
-        //Matrix4x4 rotation = CreateRotation(rot);
-        //Vector3 forward = Vector3.TransformNormal(Vector3.UnitZ, rotation);
-        //Vector3 up = Vector3.TransformNormal(Vector3.UnitY, rotation);
-        //return Matrix4x4.CreateWorld(pos, forward, up);
         Matrix4x4 position = Matrix4x4.CreateTranslation(pos);
         Matrix4x4 rotation = CreateRotation(rot);
         Matrix4x4 scale = Matrix4x4.CreateScale(sca);
 
-        return position * rotation * scale;
+        return scale * rotation * position;
+    }
+
+    public static Matrix4x4 CreateView(Vector3 pos, Vector3 rot)
+    {
+        Matrix4x4 rotation = CreateRotation(rot);
+        Vector3 xaxis = Vector3.TransformNormal(Vector3.UnitX, rotation);
+        Vector3 yaxis = Vector3.TransformNormal(Vector3.UnitY, rotation);
+        Vector3 zaxis = Vector3.TransformNormal(Vector3.UnitZ, rotation);
+
+        Matrix4x4 result = Matrix4x4.Identity;
+        result.M11 = xaxis.X;
+        result.M21 = xaxis.Y;
+        result.M31 = xaxis.Z;
+        result.M12 = yaxis.X;
+        result.M22 = yaxis.Y;
+        result.M32 = yaxis.Z;
+        result.M13 = zaxis.X;
+        result.M23 = zaxis.Y;
+        result.M33 = zaxis.Z;
+        result.M41 = -Vector3.Dot(xaxis, pos);
+        result.M42 = -Vector3.Dot(yaxis, pos);
+        result.M43 = -Vector3.Dot(zaxis, pos);
+
+        return result;
+    }
+
+    public static Matrix4x4 CreateProjection(float fovVDegrees, float aspectRatioHW, float nearPlane, float farPlane)
+    {
+        float fFovRad = 1.0f / (float)Math.Tan(fovVDegrees * 0.5f * DEG2RAD);
+        Matrix4x4 mat = new();
+        mat.M11 = fFovRad;
+        mat.M22 = aspectRatioHW * fFovRad;
+        mat.M33 = farPlane / (farPlane - nearPlane);
+        mat.M43 = (-farPlane * nearPlane) / (farPlane - nearPlane);
+        mat.M34 = 1.0f;
+        return mat;
     }
 
     public static void print(object message)
     {
-        Trace.WriteLine(message);
+#if DEBUG
+        messages.Enqueue(DateTime.Now.Ticks + ": " + message.ToString());
+#endif
     }
 
     public static void print()
     {
-        Trace.WriteLine("");
-    }
-
-    public static Engine Create(EngineDescription desc)
-    {
-        return new Engine(desc);
-    }
-
-    public static RasterizingEngine Create(RasterizingEngineDescription desc)
-    {
-        return new RasterizingEngine(desc);
-    }
-
-    public static RayTracingEngine Create(RayTracingEngineDescription desc)
-    {
-        return new RayTracingEngine(desc);
+        print("");
     }
 }

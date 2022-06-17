@@ -1,12 +1,40 @@
 /////////////////////////////////////////
-//            Declarations             //
+//            Definitions              //
 /////////////////////////////////////////
 
+#define NUM_MATERIALS 1
+#define NUM_OBJECTS 1
 #define NUM_TRIS 1
 #define NUM_SPHERES 1
 #define NUM_LIGHTS 1
 #define NUM_RAYS 1
+#define BOX false
+#define PI 3.14159265359f
+#define TWO_PI 6.28318530718f
+#define MIN_POWER 0.005f
+#define NORMAL_OFFSET 0.0001f
+#define ATMOSPHERE_DIR float3(0.0f, 1.0f, 0.0f)
 #define RED float3(1.0f, 0.0f, 0.0f)
+#define GREEN float3(0.0f, 1.0f, 0.0f)
+#define BLUE float3(0.0f, 0.0f, 1.0f)
+#define MAGENTA float3(1.0f, 0.0f, 1.0f)
+#define CYAN float3(0.0f, 1.0f, 1.0f)
+
+/////////////////////////////////////////
+//             Structures              //
+/////////////////////////////////////////
+
+struct VertexShaderInput
+{
+	float2 position : POSITION;
+	float2 normal : NORMAL;
+};
+
+struct VertexShaderOutput
+{
+	float4 position : SV_POSITION;
+	float3 direction : NORMAL;
+};
 
 struct Ray
 {
@@ -16,22 +44,35 @@ struct Ray
 	float3 tint;
 };
 
+struct Material
+{
+	float3 diffuse; // kd; ka = kd * atmosphere
+	float rough; // sqrt(alpha)
+	float3 spec; // ks
+	float shine; // s
+	float ior; // ior
+	float3 padding;
+};
+
+struct Gameobject
+{
+	float3 position;
+	float radius;
+	uint startIndex;
+	uint endIndex;
+	float2 padding;
+};
+
 struct Triangle
 {
 	float3 vertices[3];
 	float3 normals[3];
-	float3 color;
-	float reflectivity;
 };
 
 struct Sphere
 {
 	float3 position;
 	float radius;
-	float3 color;
-	float ior;
-	float reflectivity;
-	float3 padding;
 };
 
 struct Light
@@ -39,7 +80,22 @@ struct Light
 	float3 position;
 	float radius;
 	float3 color;
-	float padding;
+	float luminosity;
+};
+
+struct RayHit
+{
+	float distance;
+	float2 bary;
+	int object;
+	int tri;
+	bool outside;
+};
+
+struct RayHitBlocked
+{
+	int object;
+	bool blocked;
 };
 
 /////////////////////////////////////////
@@ -48,15 +104,16 @@ struct Light
 
 cbuffer PerApplication : register(b0)
 {
-	float3 BGCol;
-	float MinBrightness;
+	float3 LowerAtmosphere;
 	uint Width;
+	float3 UpperAtmosphere;
 	uint Height;
-	float2 padding;
 };
 
 cbuffer Geometry : register(b1)
 {
+	Material Materials[NUM_MATERIALS];
+	Gameobject Gameobjects[NUM_OBJECTS];
 	Triangle Triangles[NUM_TRIS];
 	Sphere Spheres[NUM_SPHERES];
 	Light Lights[NUM_LIGHTS];
@@ -70,12 +127,17 @@ cbuffer PerFrame : register(b2)
 };
 
 /////////////////////////////////////////
-//              Methods                //
+//             Functions               //
 /////////////////////////////////////////
 
 float square(float value)
 {
 	return value * value;
+}
+
+float Pow5(float value)
+{
+	return value * value * value * value * value;
 }
 
 float rand(float2 p)
@@ -119,44 +181,142 @@ float3 refr(float3 incident, float3 normal, float ior)
 		return eta * incident + (eta * cosi - sqrt(k)) * normal;
 }
 
-float TriangleInterpolation(float3 e, float3 f, float3 g)
+float NormalDistribution(float alpha, float3 normal, float3 middle)
 {
-	return length(cross(f, g)) / length(cross(f, e));
+	// GGX
+	float ndotm = dot(normal, middle);
+	if (ndotm <= 0.0f)
+	{
+		return 0.0f;
+	}
+	float dotSqr = square(ndotm);
+	float alphaSqr = square(alpha);
+	return alphaSqr / (PI * square(dotSqr * (alphaSqr + (1.0f - dotSqr) / dotSqr)));
 }
 
-float TriangleIntersect(Ray ray, Triangle tri)
+float Geometric(float3 view, float3 light, float3 middle, float3 normal, float alpha)
 {
-	float3 n = normalize(cross(tri.vertices[1] - tri.vertices[0], tri.vertices[2] - tri.vertices[0]));
-	float numerator = dot(n, tri.vertices[0] - ray.origin);
-	float denominator = dot(n, ray.direction);
-	if (denominator >= 0.0f) // not facing camera
+	// GGX
+	float vdotm = dot(view, middle);
+	float vdotn = dot(view, normal);
+	float ldotm = dot(light, middle);
+	float ldotn = dot(light, normal);
+	if (vdotm / vdotn <= 0.0f || ldotm / ldotn <= 0.0f)
+	{
+		return 0.0f;
+	}
+	else
+	{
+		float alphaSqr = square(alpha);
+		float vDotSqr = square(vdotn);
+		float lDotSqr = square(ldotn);
+		return 4.0f / (1.0f + sqrt(1.0f + alphaSqr * (1.0f - vDotSqr) / vDotSqr)) / (1.0f + sqrt(1.0f + alphaSqr * (1.0f - lDotSqr) / lDotSqr));
+	}
+}
+
+float Fresnel(float ior, float3 view, float3 middle)
+{
+	// Schlick’s Approximation
+	float F0 = square(ior - 1.0f) / square(ior + 1.0f);
+	return F0 + (1.0f - F0) * Pow5(1.0f - dot(view, middle));
+}
+
+float Fresnel2(float3 incident, float3 normal, float ior)
+{
+	float cosi = dot(incident, normal);
+	float etai = 1.0f;
+	float etat = ior;
+	if (cosi > 0.0f)
+	{ 
+		float temp = etai;
+		etai = etat;
+		etat = temp;
+	}
+	else
+	{
+		cosi = -cosi;
+	}
+
+	float sint = etai / etat * sqrt(max(0.0f, 1.0f - cosi * cosi));
+	if (sint >= 1.0f) 
+	{
+		return 1.0f;
+	}
+	else
+	{
+		float cost = sqrt(max(0.0f, 1.0f - sint * sint));
+		float Rs = ((etat * cosi) - (etai * cost)) / ((etat * cosi) + (etai * cost));
+		float Rp = ((etai * cosi) - (etat * cost)) / ((etai * cosi) + (etat * cost));
+		return (Rs * Rs + Rp * Rp) / 2.0f;
+	}
+}
+
+float3 TriangleNormal(Triangle tri, float2 bary)
+{
+	// normal blending does not depend on the order of normals here
+	float z = 1.0f - bary.x - bary.y;
+	return normalize(tri.normals[0] * z + tri.normals[1] * bary.x  + tri.normals[2] * bary.y);
+}
+
+// intersects.x is ray intersection distance, intersects.yz are barycentric coordinates
+int TriangleBothsects(Ray ray, Triangle tri, out float3 intersects)
+{
+	float3 edge1 = tri.vertices[1] - tri.vertices[0];
+	float3 edge2 = tri.vertices[2] - tri.vertices[0];
+	float3 normal = cross(edge1, edge2);
+	float det = -dot(ray.direction, normal);
+	float invdet = 1.0f / det;
+	float3 toTri = ray.origin - tri.vertices[0];
+	float3 DAO = cross(toTri, ray.direction);
+	intersects.x = dot(toTri, normal) * invdet;
+	intersects.y = dot(edge2, DAO) * invdet;
+	intersects.z = -dot(edge1, DAO) * invdet;
+	if ((intersects.x >= 0.0f && intersects.y >= 0.0f
+		&& intersects.z >= 0.0f && (intersects.y + intersects.z) <= 1.0f))
+	{
+		if (det >= 1e-6f) // in front
+		{
+			return 1;
+		}
+		else if (det <= -1e-6f) // behind
+		{
+			return -1;
+		}
+	}
+	return 0; // no intersect
+}
+
+bool TriangleIntersect(Ray ray, Triangle tri, out float distance)
+{
+	float3 edge1 = tri.vertices[1] - tri.vertices[0];
+	float3 edge2 = tri.vertices[2] - tri.vertices[0];
+	float3 normal = cross(edge1, edge2);
+	float det = -dot(ray.direction, normal);
+	float invdet = 1.0f / det;
+	float3 toTri = ray.origin - tri.vertices[0];
+	float3 DAO = cross(toTri, ray.direction);
+	distance = dot(toTri, normal) * invdet;
+	float u = dot(edge2, DAO) * invdet;
+	float v = -dot(edge1, DAO) * invdet;
+	return (det >= 1e-6f && distance >= 0.0f && u >= 0.0f && v >= 0.0f && (u + v) <= 1.0f);
+}
+
+// first intersect is always smaller
+float2 ObjectIntersects(Ray ray, Gameobject obj)
+{
+	float3 toObject = ray.origin - obj.position;
+	float discriminant = square(dot(ray.direction, toObject)) - dot(toObject, toObject) + square(obj.radius);
+	if (discriminant < 0.0f) // does not intersect
 	{
 		return 1.#INF;
 	}
-	float intersection = numerator / denominator;
-	if (intersection <= 0.0f) // intersects behind camera
-	{
-		return 1.#INF;
-	}
-
-	// test if intersection is inside triangle ////////////////////////////
-	float3 pt = ray.origin + ray.direction * intersection;
-	float3 edge0 = tri.vertices[1] - tri.vertices[0];
-	float3 edge1 = tri.vertices[2] - tri.vertices[1];
-	float3 edge2 = tri.vertices[0] - tri.vertices[2];
-	float3 C0 = pt - tri.vertices[0];
-	float3 C1 = pt - tri.vertices[1];
-	float3 C2 = pt - tri.vertices[2];
-	if (dot(n, cross(C0, edge0)) <= 0 &&
-		dot(n, cross(C1, edge1)) <= 0 &&
-		dot(n, cross(C2, edge2)) <= 0)
-	{
-		return intersection;
-	}
-	return 1.#INF; // point is outside the triangle
+	float out1 = -dot(ray.direction, ray.origin - obj.position);
+	float out2 = sqrt(discriminant);
+	return float2(out1 - out2, out1 + out2);
 }
 
-float SphereIntersect(Ray ray, Sphere sph)
+// first intersect is always smaller
+float2 SphereIntersects(Ray ray, Sphere sph)
 {
 	float3 toSphere = ray.origin - sph.position;
 	float discriminant = square(dot(ray.direction, toSphere)) - dot(toSphere, toSphere) + square(sph.radius);
@@ -164,34 +324,15 @@ float SphereIntersect(Ray ray, Sphere sph)
 	{
 		return 1.#INF;
 	}
-	float intersection = -dot(ray.direction, ray.origin - sph.position) - sqrt(discriminant);
-	if (intersection <= 0.0f) // intersects behind ray
-	{
-		return 1.#INF;
-	}
-	return intersection;
-}
-
-float SphereOutersect(Ray ray, Sphere sph)
-{
-	float3 toSphere = ray.origin - sph.position;
-	float discriminant = square(dot(ray.direction, toSphere)) - dot(toSphere, toSphere) + square(sph.radius);
-	if (discriminant < 0.0f) // does not intersect
-	{
-		return 1.#INF;
-	}
-	float intersection = -dot(ray.direction, ray.origin - sph.position) + sqrt(discriminant);
-	if (intersection <= 0.0f) // intersects behind camera
-	{
-		return 1.#INF;
-	}
-	return intersection;
+	float out1 = -dot(ray.direction, ray.origin - sph.position);
+	float out2 = sqrt(discriminant);
+	return float2(out1 - out2, out1 + out2);
 }
 
 float LightIntersect(Ray ray, Light lig)
 {
-	float3 toSphere = ray.origin - lig.position;
-	float discriminant = square(dot(ray.direction, toSphere)) - dot(toSphere, toSphere) + square(lig.radius);
+	float3 toLight = ray.origin - lig.position;
+	float discriminant = square(dot(ray.direction, toLight)) - lengthSqr(toLight) + square(lig.radius);
 	if (discriminant < 0.0f) // does not intersect
 	{
 		return 1.#INF;
@@ -204,305 +345,338 @@ float LightIntersect(Ray ray, Light lig)
 	return intersection;
 }
 
-float2 closest(Ray ray)
+RayHit Closest(Ray ray)
 {
-	int index = -1;
-	float bestDistance = 1.#INF;
-	for (uint j = 0; j < NUM_TRIS; j++)
+	RayHit hit;
+	hit.object = -1;
+	hit.tri = -1;
+	hit.distance = 1.#INF;
+	hit.bary = 1.#INF;
+	hit.outside = true;
+	for (uint i = 0; i < NUM_SPHERES; i++)
 	{
-		float dist = TriangleIntersect(ray, Triangles[j]);
-		if (dist < bestDistance)
+		float2 intersects = SphereIntersects(ray, Spheres[i]);
+		if (intersects.x < hit.distance && intersects.y > 0.0f)
 		{
-			index = j;
-			bestDistance = dist;
+			hit.object = NUM_OBJECTS + i;
+			if (intersects.x > 0.0f)
+			{
+				hit.distance = intersects.x;
+				hit.outside = true;
+			}
+			else
+			{
+				hit.distance = intersects.y;
+				hit.outside = false;
+			}
 		}
 	}
-	for (j = 0; j < NUM_SPHERES; j++)
+	for (i = 0; i < NUM_LIGHTS; i++)
 	{
-		float dist = SphereIntersect(ray, Spheres[j]);
-		if (dist < bestDistance)
+		float dist = LightIntersect(ray, Lights[i]);
+		if (dist < hit.distance)
 		{
-			index = NUM_TRIS + j;
-			bestDistance = dist;
+			hit.object = NUM_OBJECTS + NUM_SPHERES + i;
+			hit.distance = dist;
 		}
 	}
-	for (j = 0; j < NUM_LIGHTS; j++)
+	for (i = 0; i < NUM_OBJECTS; i++)
 	{
-		float dist = LightIntersect(ray, Lights[j]);
-		if (dist < bestDistance)
+		float2 intersects = ObjectIntersects(ray, Gameobjects[i]);
+		if (intersects.x < hit.distance && intersects.y > 0.0f)
 		{
-			index = NUM_TRIS + NUM_SPHERES + j;
-			bestDistance = dist;
+			if (Materials[i].ior == 0.0f)
+			{
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				{
+					float3 distances;
+					if (TriangleBothsects(ray, Triangles[j], distances) > 0 && distances.x < hit.distance)
+					{
+						hit.object = i;
+						hit.tri = j;
+						hit.distance = distances.x;
+						hit.bary = distances.yz;
+						hit.outside = true;
+					}
+				}
+			}
+			else
+			{
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				{
+					float3 distances;
+					int temp = TriangleBothsects(ray, Triangles[j], distances);
+					if (distances.x < hit.distance && temp != 0)
+					{
+						hit.object = i;
+						hit.tri = j;
+						hit.distance = distances.x;
+						hit.bary = distances.yz;
+						hit.outside = temp == 1;
+					}
+				}
+			}
 		}
 	}
 
-	return float2(bestDistance, index);
+	return hit;
 }
 
-float2 closestIgnoreLights(Ray ray)
+RayHitBlocked Occluder(Ray ray, float lightDist)
 {
-	float bestDistance = 1.#INF;
-	int index = -1;
-	for (uint j = 0; j < NUM_TRIS; j++)
+	RayHitBlocked hit;
+	hit.blocked = true;
+	int temp = -1;
+	float best = lightDist;
+	hit.object = -1;
+	for (uint i = 0; i < NUM_SPHERES; i++)
 	{
-		float dist = TriangleIntersect(ray, Triangles[j]);
-		if (dist < bestDistance)
+		float2 intersects = SphereIntersects(ray, Spheres[i]);
+		if (intersects.x < lightDist && intersects.x > 0.0f)
 		{
-			bestDistance = dist;
-			index = j;
+			if (Materials[NUM_OBJECTS + i].ior == 0.0f)
+				return hit;
+			if (intersects.x < best)
+			{
+				temp = NUM_OBJECTS + i;
+				best = intersects.x;
+			}
 		}
 	}
-	for (j = 0; j < NUM_SPHERES; j++)
+	for (i = 0; i < NUM_OBJECTS; i++)
 	{
-		float dist = SphereIntersect(ray, Spheres[j]);
-		if (dist < bestDistance)
+		float2 intersects = ObjectIntersects(ray, Gameobjects[i]);
+		if (intersects.x < lightDist && intersects.y > 0.0f)
 		{
-			bestDistance = dist;
-			index = j + NUM_TRIS;
+			if (Materials[i].ior == 0.0f)
+			{
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				{
+					float dist;
+					if (TriangleIntersect(ray, Triangles[j], dist) && dist < lightDist)
+						return hit;
+				}
+			}
+			else
+			{
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				{
+					float dist;
+					if (TriangleIntersect(ray, Triangles[j], dist) && dist < best)
+					{
+						temp = i;
+						best = dist;
+					}
+				}
+			}
 		}
 	}
 
-	return float2(bestDistance, index);
-}
-
-float4 closestWithTint(Ray ray)
-{
-	float bestDistance = 1.#INF;
-	float3 color = 1.0f;
-	for (uint j = 0; j < NUM_TRIS; j++)
-	{
-		float dist = TriangleIntersect(ray, Triangles[j]);
-		if (dist < bestDistance)
-			return 1.#INF;
-	}
-	for (j = 0; j < NUM_SPHERES; j++)
-	{
-		float dist = SphereIntersect(ray, Spheres[j]);
-		if (dist < bestDistance)
-		{
-			if (Spheres[j].ior == 0.0f)
-				return 1.#INF;
-			bestDistance = dist;
-			color *= Spheres[j].color;
-		}
-	}
-
-	return float4(color, bestDistance);
+	hit.object = temp;
+	hit.blocked = false;
+	return hit;
 }
 
 /////////////////////////////////////////
 //        Shader Entry Points          //
 /////////////////////////////////////////
 
-float4 vertexShader(float3 position : POSITION) : SV_Position
+VertexShaderOutput vertexShader(VertexShaderInput In)
 {
-	return float4(position, 1.0f);
+	VertexShaderOutput Out;
+	Out.position = float4(In.position, 0.0f, 1.0f);
+	Out.direction = mul((float3x3)EyeRot, float3(In.normal, 0.1f));
+	return Out;
 }
 
 // gpu raytracer
-float3 pixelShader(float4 position : SV_Position) : SV_TARGET
+float3 pixelShader(VertexShaderOutput In) : SV_TARGET
 {
-	//return Spheres[1].ior;
-	//return random(position.xy);
-	//return float3(position.x / Width, position.y / Height, min((Width - position.x) / Width, (Height - position.y) / Height));
+	//return random(In.position.xy);
+	//return float3(In.position.x / Width, In.position.y / Height, min((Width - In.position.x) / Width, (Height - In.position.y) / Height));
 
-	float3 color = 0.0f;
     Ray rays[NUM_RAYS];
-	float pitch = (position.y * -2.0f / Height + 1.0f) * (Height / (float)Width) * 0.1f;
-	float yaw = (position.x * 2.0f / Width - 1.0f) * 0.1f;
-	float3 direction = float3(yaw, pitch, 0.1f);
-	direction = mul((float3x3)EyeRot, direction);
-	rays[0].origin = direction + EyePos;
-	rays[0].direction = normalize(direction);
+	float3 color = 0.0f;
+	rays[0].origin = In.direction + EyePos;
+	rays[0].direction = normalize(In.direction);
 	rays[0].residual = 1.0f;
 	rays[0].tint = 1.0f;
-
-	for (uint i = 0; i < 3; i++)
+	
+	// unrolled to avoid artifacts
+	[unroll]
+	for (uint i = 0; i < NUM_RAYS / 2; i++)
 	{
-		if (rays[i].residual == 0.0f) // if ray isnt set
+		uint iRefl = (2 * i) + 1;
+		uint iRefr = iRefl + 1;
+
+		// remove invisible rays
+		if (rays[i].residual < MIN_POWER)
 		{
-			rays[2 * i + 1].residual = 0.0f;
-			rays[2 * i + 2].residual = 0.0f;
+			rays[iRefl].residual = 0.0f;
+			rays[iRefr].residual = 0.0f;
 			continue;
 		}
 
 		// get the closest object
-		float2 data = closest(rays[i]);
-		int cIndex = data.y;
+		RayHit hit = Closest(rays[i]);
 
-		if (cIndex == -1) // no collision
+		// no collision
+		if (hit.object == -1)
 		{
-			color += BGCol * rays[i].residual * rays[i].tint;
-			rays[2 * i + 1].residual = 0.0f;
-			rays[2 * i + 2].residual = 0.0f;
+			float amb = 0.5f + (0.5f * dot(rays[i].direction, ATMOSPHERE_DIR));
+			float3 bg = amb * UpperAtmosphere + (1.0f - amb) * LowerAtmosphere;
+			color += bg * rays[i].residual * rays[i].tint;
+			rays[iRefl].residual = 0.0f;
+			rays[iRefr].residual = 0.0f;
 			continue;
 		}
 
 		// if light is closest
-		if (cIndex >= NUM_TRIS + NUM_SPHERES)
+		if (hit.object >= NUM_OBJECTS + NUM_SPHERES)
 		{
-			if (i == 0)
-				color += Lights[cIndex - NUM_TRIS - NUM_SPHERES].color * rays[i].residual * rays[i].tint;
-			rays[2 * i + 1].residual = 0.0f;
-			rays[2 * i + 2].residual = 0.0f;
+			color += Lights[hit.object - NUM_OBJECTS - NUM_SPHERES].color * rays[i].residual * rays[i].tint;
+			rays[iRefl].residual = 0.0f;
+			rays[iRefr].residual = 0.0f;
 			continue;
 		}
 
-		// update next ray
-		rays[2 * i + 1].residual = rays[i].residual;
-		rays[2 * i + 1].tint = rays[i].tint;
-		rays[2 * i + 2].residual = rays[i].residual;
-		rays[2 * i + 2].tint = rays[i].tint;
+		// update next rays
+		rays[iRefl].residual = rays[i].residual;
+		rays[iRefl].tint = rays[i].tint;
+		rays[iRefr].residual = rays[i].residual;
+		rays[iRefr].tint = rays[i].tint;
 
-		// if sphere or tri is closest
-		rays[2 * i + 1].origin = rays[i].origin + rays[i].direction * data.x; // ray hit
+		rays[iRefl].origin = rays[i].origin + rays[i].direction * hit.distance; // ray hit
+
+		// normal
 		float3 normal;
-		float3 col;
-		float3 tint = 0.0f;
-		float refl;
-		if (cIndex >= NUM_TRIS) // if sphere is closest, normal is from centre of sphere to intersect
+		if (hit.object >= NUM_OBJECTS)
 		{
-			int temp = cIndex - NUM_TRIS;
-			if (Spheres[temp].ior == 0.0f)
-				col = Spheres[temp].color;
-			else
-			{
-				col = 0.0f;
-				tint = Spheres[temp].color;
-			}
-			rays[2 * i + 1].residual *= Spheres[temp].reflectivity;
-			rays[2 * i + 2].residual *= (1.0f - Spheres[temp].reflectivity);
-			refl = Spheres[temp].reflectivity;
-			normal = normalize(rays[2 * i + 1].origin - Spheres[temp].position);
+			normal = normalize(rays[iRefl].origin - Spheres[hit.object - NUM_OBJECTS].position);
 		}
-		else // if tri is closest, blend between each vertex normal
+		else 
 		{
-			col = Triangles[cIndex].color;
-			rays[2 * i + 1].residual *= Triangles[cIndex].reflectivity;
-			rays[2 * i + 2].residual *= 0.0f;
-			refl = Triangles[cIndex].reflectivity;
+			normal = TriangleNormal(Triangles[hit.tri], hit.bary);
+		}
 
-			// different normal possibilities
-			if (lengthSqr(Triangles[cIndex].normals[0]) == 0.0f)
+		// refraction specifics
+		float3 rd;
+		if (Materials[hit.object].ior == 0.0f)
+		{
+			// atmospheric lighting
+			float amb = 0.5f + (0.5f * dot(normal, ATMOSPHERE_DIR));
+			float3 bg = amb * UpperAtmosphere + (1.0f - amb) * LowerAtmosphere;
+			rd = Materials[hit.object].diffuse;
+			color += rd * bg; 
+
+			// no refraction
+			rays[iRefl].residual *= Materials[hit.object].shine;
+			rays[iRefr].residual = 0.0f;
+		}
+		else
+		{
+			rd = 0.0f;
+
+			// ignore placeholder rays that will not be cast
+			if (i < NUM_RAYS / 4)
 			{
-				float3 ad = Triangles[cIndex].vertices[2] - Triangles[cIndex].vertices[1];
-				float3 bd = rays[2 * i + 1].origin - Triangles[cIndex].vertices[0];
-				float c = TriangleInterpolation(ad, bd, Triangles[cIndex].vertices[0] - Triangles[cIndex].vertices[1]);
-				normal = normalize(lerp(Triangles[cIndex].normals[1], Triangles[cIndex].normals[2], c));
-			}
-			else if (lengthSqr(Triangles[cIndex].normals[1]) == 0.0f)
-			{
-				float3 ad = Triangles[cIndex].vertices[2] - Triangles[cIndex].vertices[0];
-				float3 bd = rays[2 * i + 1].origin - Triangles[cIndex].vertices[1];
-				float c = TriangleInterpolation(ad, bd, Triangles[cIndex].vertices[1] - Triangles[cIndex].vertices[0]);
-				normal = normalize(lerp(Triangles[cIndex].normals[0], Triangles[cIndex].normals[2], c));
-			}
-			else if (lengthSqr(Triangles[cIndex].normals[2]) == 0.0f)
-			{
-				float3 ad = Triangles[cIndex].vertices[1] - Triangles[cIndex].vertices[0];
-				float3 bd = rays[2 * i + 1].origin - Triangles[cIndex].vertices[2];
-				float c = TriangleInterpolation(ad, bd, Triangles[cIndex].vertices[2] - Triangles[cIndex].vertices[0]);
-				normal = normalize(lerp(Triangles[cIndex].normals[0], Triangles[cIndex].normals[1], c));
-			}
-			else // typical normals
-			{
-				float3 ao = Triangles[cIndex].vertices[0];
-				float3 ad = Triangles[cIndex].vertices[1] - Triangles[cIndex].vertices[0];
-				float3 bd = rays[2 * i + 1].origin - Triangles[cIndex].vertices[2];
-				float c = TriangleInterpolation(ad, bd, Triangles[cIndex].vertices[2] - Triangles[cIndex].vertices[0]);
-				float3 intersect = ao + ad * c;
-				float d = sqrt(lengthSqr(bd) / lengthSqr(intersect - Triangles[cIndex].vertices[2]));
-				normal = normalize(lerp(Triangles[cIndex].normals[0], Triangles[cIndex].normals[1], c));
-				normal = normalize(lerp(Triangles[cIndex].normals[2], normal, d));
+				// refration ray
+				rays[iRefr].origin = rays[iRefl].origin + normal * NORMAL_OFFSET * (hit.outside ? -1 : 1);
+				rays[iRefr].direction = refr(rays[i].direction, normal, Materials[hit.object].ior);
+
+				// refration resisuals
+				float reflectance = Fresnel2(rays[i].direction, normal, Materials[hit.object].ior);
+				rays[iRefl].residual *= reflectance;
+				rays[iRefr].residual *= (1.0f - reflectance);
+				rays[iRefr].tint *= Materials[hit.object].diffuse;
 			}
 		}
 
 		// reflection ray
-		rays[2 * i + 1].direction = normalize(reflect(rays[i].direction, normal));
+		if (dot(rays[i].direction, normal) < 0.0f)
+		{
+			rays[iRefl].direction = normalize(reflect(rays[i].direction, normal));
+		}
+		else
+		{
+			// reduces artifacts for low poly objects
+			rays[iRefl].direction = rays[i].direction;
+		}
+		rays[iRefl].origin += normal * NORMAL_OFFSET;
+
+		// do not perform direct lighting on the inside of transparent objects
+		if (!hit.outside)
+		{
+			continue;
+		}
 
 		// direct lighting / specular
-		for (uint j = 0; j < NUM_LIGHTS; j++) 
+		for (uint j = 0; j < NUM_LIGHTS; j++)
 		{
-			float3 toLight = Lights[j].position - rays[2 * i + 1].origin;
-			if (dot(toLight, normal) > 0) // check if the surface is facing the light
+			float3 toLight = Lights[j].position - rays[iRefl].origin;
+
+			// check if the surface is facing the light
+			if (dot(toLight, normal) > 0)
 			{
-				float lightDist = length(toLight);
+				float dist = length(toLight);
+
 				Ray ray2;
-				ray2.direction = toLight / lightDist;
-				ray2.origin = rays[2 * i + 1].origin;
+				ray2.direction = toLight / dist;
+				ray2.origin = rays[iRefl].origin;
 
-				// check for shadows
-				data = closestIgnoreLights(ray2);
-				int sIndex = data.y;
-				
-				if (sIndex < 0) // no shadows
+				RayHitBlocked hit2 = Occluder(ray2, dist);
+
+				if (!hit2.blocked)
 				{
-					float diffuse = dot(ray2.direction, normal);
-					float specular = pow(saturate(dot(ray2.direction, rays[2 * i + 1].direction)), 1.0f / refl - 1.0f);
-					color += rays[i].residual * Lights[j].color * (col * diffuse + specular) * 0.5f * rays[i].tint;
-				}
-				else if (sIndex >= NUM_TRIS && Spheres[sIndex - NUM_TRIS].ior != 0.0f) // transparent object
-				{
-					sIndex -= NUM_TRIS;
-					// refract through front 
-					ray2.origin = ray2.origin + ray2.direction * data.x;
-					float3 refrNormal = normalize(ray2.origin - Spheres[sIndex].position);
-					float3 refracted = refr(ray2.direction, refrNormal, Spheres[sIndex].ior);
-					float strength = Spheres[sIndex].ior * pow(dot(refracted, ray2.direction), Spheres[sIndex].ior * 100.0f); // strength calculation
+					float3 lc = (rays[i].residual * Lights[j].color * rays[i].tint);
 
-					//refract through back
-					ray2.direction = refracted;
-					float intersect = SphereOutersect(ray2, Spheres[sIndex]);
-					ray2.origin = ray2.origin + ray2.direction * intersect;
-					refrNormal = normalize(ray2.origin - Spheres[sIndex].position);
-					ray2.direction = refr(ray2.direction, refrNormal, Spheres[sIndex].ior);
-
-					// check collision with light
-					float4 data2 = closestWithTint(ray2);
-
-					if (data2.w < 1.#INF)
+					// lit surface
+					if (hit2.object == -1)
 					{
-						return RED;
-						color += rays[i].residual * (1.0f - Spheres[sIndex].reflectivity) * strength * 
-							Spheres[sIndex].color * Lights[j].color * rays[i].tint * data2.rgb;
+						// cook-torrance brdf model
+						float lamb = dot(ray2.direction, normal);
+						float3 v = -rays[i].direction;
+						float s = Materials[hit.object].shine;
+						float d = 1.0f - s;
+						float alpha = square(Materials[hit.object].rough);
+						float3 middle = normalize(ray2.direction + v);
+						float D = NormalDistribution(alpha, normal, middle);
+						float G = Geometric(v, ray2.direction, middle, normal, alpha);
+						float F = Fresnel(Materials[hit.object].ior, v, middle);
+						float rs = D * G * F / (4.0f * dot(normal, v)); // removed lamb from denominator
+						color += lc * (lamb * d * rd + s * rs * Materials[hit.object].spec);
 					}
+					// transparent occluder and opaque receiver
+					else if (Materials[hit.object].ior == 0.0f)
+					{
+						float3 objectLight;
+						float3 objectEdge;
+						if (hit2.object >= NUM_OBJECTS)
+						{
+							int index = hit2.object - NUM_OBJECTS;
+							objectLight = normalize(Lights[j].position - Spheres[index].position);
+							objectEdge = Spheres[index].position - objectLight * Spheres[index].radius;
+						}
+						else
+						{
+							objectLight = normalize(Lights[j].position - Gameobjects[hit2.object].position);
+							objectEdge = Gameobjects[hit2.object].position - objectLight * Gameobjects[hit2.object].radius;
+						}
+
+						// angle and diffuse calculation
+						float3 toEdge = normalize(objectEdge - ray2.origin);
+						float angle = saturate(dot(toEdge, objectLight));
+						float diffuse = dot(toEdge, normal);
+
+						color += 0.92f * angle * diffuse * Materials[hit2.object].diffuse * lc;
+					}
+					// otherwise, shadows
 				}
-				//else // opaque object
-				//{
-				//	////////// soft shadows ////////////
-				//}
+				// otherwise, shadows
 			}
 		}
-
-		// refraction ray
-		if (cIndex >= NUM_TRIS && i <= NUM_RAYS / 2 && Spheres[cIndex - NUM_TRIS].ior != 0.0f)
-		{
-			// setup
-			cIndex -= NUM_TRIS;
-			int next = 2 * i + 2;
-			rays[next].origin = rays[next - 1].origin;
-			rays[next].direction = rays[i].direction;
-
-			// refract front
-			rays[next].direction = refr(rays[next].direction, normal, Spheres[cIndex].ior);
-			float intersect = SphereOutersect(rays[next], Spheres[cIndex]);
-
-			//refract back
-			rays[next].origin = rays[next].origin + rays[next].direction * intersect;
-			normal = normalize(rays[next].origin - Spheres[cIndex].position);
-			rays[next].direction = refr(rays[next].direction, normal, Spheres[cIndex].ior);
-			
-			// update tint
-			rays[next].tint *= tint;
-		}
-
-		// remove invisible rays
-		if (rays[2 * i + 1].residual < 0.01f)
-			rays[2 * i + 1].residual = 0.0f;
-		if (rays[2 * i + 2].residual < 0.01f)
-			rays[2 * i + 2].residual = 0.0f;
 	}
 	
-	color += ((random(position.xy) - 0.5f) / 255.0f);
+	color += ((random(In.position.xy) - 0.5f) / 255.0f);
 	return color;
 }
