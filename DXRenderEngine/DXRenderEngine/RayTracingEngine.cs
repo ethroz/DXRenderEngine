@@ -1,12 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Numerics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
@@ -24,9 +23,6 @@ public sealed class RayTracingEngine : Engine
     public new readonly RayTracingEngineDescription Description;
     private new ScreenPositionNormal[] vertices;
     public readonly List<Sphere> spheres = new();
-    private ID3D11Buffer[] buffers;
-    private RayApplicationBuffer applicationData;
-    private RayFrameBuffer frameData;
     private Material[] packedMaterials;
     private PackedGameobject[] packedGameobjects;
     private PackedTriangle[] packedTriangles;
@@ -38,14 +34,6 @@ public sealed class RayTracingEngine : Engine
     public RayTracingEngine(RayTracingEngineDescription ED) : base(ED)
     {
         Description = ED;
-        Assembly assembly = Assembly.GetExecutingAssembly();
-        string resourceName = "DXRenderEngine.DXRenderEngine.RayShaders.hlsl";
-
-        using (Stream stream = assembly.GetManifestResourceStream(resourceName))
-        using (StreamReader reader = new(stream))
-        {
-            shaderCode = reader.ReadToEnd();
-        }
 
         inputElements = new InputElementDescription[]
         {
@@ -60,7 +48,7 @@ public sealed class RayTracingEngine : Engine
         if (spheres.Count == 0)
             spheres.Add(new());
         triangleCount = 0;
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             gameobjects[i].Offset = triangleCount;
             triangleCount += gameobjects[i].Triangles.Length;
@@ -79,23 +67,11 @@ public sealed class RayTracingEngine : Engine
     {
         base.SetConstantBuffers();
 
-        buffers = new ID3D11Buffer[3];
-        applicationData = new();
-        frameData = new();
         packedMaterials = new Material[gameobjects.Count + spheres.Count];
         packedTriangles = new PackedTriangle[triangleCount];
         packedGameobjects = new PackedGameobject[gameobjects.Count];
         packedSpheres = new PackedSphere[spheres.Count];
         packedLights = new PackedLight[lights.Count];
-
-        BufferDescription bd = new(Marshal.SizeOf(applicationData), BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
-        buffers[0] = device.CreateBuffer(bd);
-        bd.SizeInBytes = Marshal.SizeOf(packedMaterials[0]) * packedMaterials.Length + Marshal.SizeOf(packedGameobjects[0]) * packedGameobjects.Length +
-            Marshal.SizeOf(packedTriangles[0]) * packedTriangles.Length + Marshal.SizeOf(packedSpheres[0]) * packedSpheres.Length +
-            Marshal.SizeOf(packedLights[0]) * packedLights.Length;
-        buffers[1] = device.CreateBuffer(bd);
-        bd.SizeInBytes = Marshal.SizeOf(frameData);
-        buffers[2] = device.CreateBuffer(bd);
 
         context.PSSetConstantBuffers(0, buffers.Length, buffers);
         context.VSSetConstantBuffer(2, buffers[2]);
@@ -123,10 +99,10 @@ public sealed class RayTracingEngine : Engine
             new(new(1.0f, -1.0f), new(0.1f, -0.1f * aspect))
         };
 
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             gameobjects[i].ProjectedTriangles = new TriNormsCol[gameobjects[i].Triangles.Length];
-            for (int j = 0; j < gameobjects[i].Triangles.Length; j++)
+            for (int j = 0; j < gameobjects[i].Triangles.Length; ++j)
                 gameobjects[i].ProjectedTriangles[j] = new(new Vector3[3], new Vector3[3]);
         }
 
@@ -137,46 +113,46 @@ public sealed class RayTracingEngine : Engine
 
     protected override void PerApplicationUpdate()
     {
-        applicationData = new(LowerAtmosphere, UpperAtmosphere, Width, Height);
+        cBuffers[0].Insert(LowerAtmosphere, 0);
+        cBuffers[0].Insert(Width, 1);
+        cBuffers[0].Insert(UpperAtmosphere, 2);
+        cBuffers[0].Insert(Height, 3);
 
-        MappedSubresource resource = context.Map(buffers[0], MapMode.WriteDiscard);
-        Marshal.StructureToPtr(applicationData, resource.DataPointer, true);
-        context.Unmap(buffers[0]);
+        UpdateConstantBuffer(0, MapMode.WriteDiscard);
     }
 
     private void GeometryUpdate()
     {
         PackVertices();
 
-        MappedSubresource resource = context.Map(buffers[1], MapMode.WriteNoOverwrite);
-        IntPtr pointer = resource.DataPointer;
-        WriteStructArray(packedMaterials, ref pointer);
-        WriteStructArray(packedGameobjects, ref pointer);
-        WriteStructArray(packedTriangles, ref pointer);
-        WriteStructArray(packedSpheres, ref pointer);
-        WriteStructArray(packedLights, ref pointer);
-        context.Unmap(buffers[1]);
+        int i = cBuffers[1].InsertArray(packedMaterials, 0);
+        i = cBuffers[1].InsertArray(packedGameobjects, i);
+        i = cBuffers[1].InsertArray(packedTriangles, i);
+        i = cBuffers[1].InsertArray(packedSpheres, i);
+        cBuffers[1].InsertArray(packedLights, i);
+
+        UpdateConstantBuffer(1);
     }
 
     protected override void PerFrameUpdate()
     {
         GeometryUpdate();
 
-        frameData = new(CreateRotation(EyeRot), EyePos, sw.ElapsedTicks % 60L);
+        cBuffers[2].Insert(CreateRotation(EyeRot), 0);
+        cBuffers[2].Insert(EyePos, 1);
+        cBuffers[2].Insert((float)(sw.ElapsedTicks % 60L), 2);
 
-        MappedSubresource resource = context.Map(buffers[2], MapMode.WriteNoOverwrite);
-        Marshal.StructureToPtr(frameData, resource.DataPointer, true);
-        context.Unmap(buffers[2]);
+        UpdateConstantBuffer(2);
     }
 
     private void UpdateVertices()
     {
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             gameobjects[i].CreateMatrices();
-            for (int j = 0; j < gameobjects[i].Triangles.Length; j++)
+            for (int j = 0; j < gameobjects[i].Triangles.Length; ++j)
             {
-                for (int k = 0; k < 3; k++)
+                for (int k = 0; k < 3; ++k)
                 {
                     gameobjects[i].ProjectedTriangles[j].Vertices[k] = Vector3.Transform(gameobjects[i].Triangles[j].Vertices[k], gameobjects[i].World);
                     gameobjects[i].ProjectedTriangles[j].Normals[k] = Vector3.TransformNormal(gameobjects[i].Triangles[j].Normals[k], gameobjects[i].Normal);
@@ -188,13 +164,13 @@ public sealed class RayTracingEngine : Engine
     private void PackMaterials()
     {
         int num = 0;
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             Material mat = gameobjects[i].Material;
             mat.Roughness = Math.Clamp(mat.Roughness, 0.001f, 0.999f);
             packedMaterials[num++] = mat;
         }
-        for (int i = 0; i < spheres.Count; i++)
+        for (int i = 0; i < spheres.Count; ++i)
         {
             Material mat = spheres[i].Material;
             mat.Roughness = Math.Clamp(mat.Roughness, 0.001f, 0.999f);
@@ -205,10 +181,10 @@ public sealed class RayTracingEngine : Engine
     private void PackGameobjects()
     {
         int num = 0;
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             packedGameobjects[i] = gameobjects[i].Pack();
-            for (int j = 0; j < gameobjects[i].ProjectedTriangles.Length; j++)
+            for (int j = 0; j < gameobjects[i].ProjectedTriangles.Length; ++j)
             {
                 packedTriangles[num++] = gameobjects[i].ProjectedTriangles[j].Pack();
             }
@@ -217,7 +193,7 @@ public sealed class RayTracingEngine : Engine
 
     private void PackSpheres()
     {
-        for (int i = 0; i < spheres.Count; i++)
+        for (int i = 0; i < spheres.Count; ++i)
         {
             packedSpheres[i] = spheres[i].Pack();
         }
@@ -225,7 +201,7 @@ public sealed class RayTracingEngine : Engine
 
     private void PackLights()
     {
-        for (int i = 0; i < lights.Count; i++)
+        for (int i = 0; i < lights.Count; ++i)
         {
             packedLights[i] = lights[i].Pack();
         }
@@ -236,14 +212,5 @@ public sealed class RayTracingEngine : Engine
         context.ClearRenderTargetView(renderTargetView, Colors.Black);
         context.OMSetRenderTargets(renderTargetView);
         context.Draw(vertices.Length, 0);
-    }
-
-    protected override void Dispose(bool boolean)
-    {
-        for (int i = 0; i < buffers.Length; i++)
-        {
-            buffers[i].Dispose();
-        }
-        base.Dispose(boolean);
     }
 }

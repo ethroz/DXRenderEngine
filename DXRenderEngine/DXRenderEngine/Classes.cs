@@ -6,6 +6,7 @@ using System.Reflection;
 using Vortice.Direct3D11;
 using Vortice.DirectInput;
 using Vortice.Mathematics;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
@@ -27,7 +28,7 @@ public class Gameobject
         Position = new();
         Rotation = new();
         Scale = new(1.0f);
-        Material = new();
+        Material = Material.Default;
     }
 
     public Gameobject(string name)
@@ -36,7 +37,7 @@ public class Gameobject
         Position = new();
         Rotation = new();
         Scale = new(1.0f);
-        Material = new();
+        Material = Material.Default;
     }
 
     public Gameobject(string n, Vector3 p, Vector3 r, Vector3 s, TriNormsCol[] v, Material m)
@@ -65,7 +66,7 @@ public class Gameobject
         List<int[]> vertexIndices = new();
         List<int[]> normalIndices = new();
 
-        for (int i = 0; i < document.Length; i++)
+        for (int i = 0; i < document.Length; ++i)
         {
 
             if (document[i] == "" || document[i][0] == '#' || document[i][0] == 'm' || document[i][0] == 'u' || document[i][0] == 's')
@@ -77,7 +78,7 @@ public class Gameobject
             else if (document[i].Substring(0, 2) == "v ")
             {
                 List<int> values = new();
-                for (int j = 1; j < document[i].Length; j++)
+                for (int j = 1; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == ' ')
                         values.Add(j + 1);
@@ -106,7 +107,7 @@ public class Gameobject
             else if (document[i].Substring(0, 3) == "vn ")
             {
                 List<int> values = new();
-                for (int j = 2; j < document[i].Length; j++)
+                for (int j = 2; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == ' ')
                         values.Add(j + 1);
@@ -123,7 +124,7 @@ public class Gameobject
             else if (document[i][0] == 'f')
             {
                 List<int> values = new();
-                for (int j = 1; j < document[i].Length; j++)
+                for (int j = 1; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == '/')
                         values.Add(j);
@@ -163,15 +164,15 @@ public class Gameobject
         }
 
         Vector3 position = new();
-        for (int i = 0; i < verts.Count; i++)
+        for (int i = 0; i < verts.Count; ++i)
             position += verts[i];
         position /= verts.Count;
-        for (int i = 0; i < verts.Count; i++)
+        for (int i = 0; i < verts.Count; ++i)
             verts[i] -= position;
         triangles = new TriNormsCol[vertexIndices.Count];
         if (norms.Count == 0)
         {
-            for (int i = 0; i < vertexIndices.Count; i++)
+            for (int i = 0; i < vertexIndices.Count; ++i)
             {
                 Vector3 normal = Vector3.Normalize(Vector3.Cross(verts[vertexIndices[i][1]] - verts[vertexIndices[i][0]], verts[vertexIndices[i][2]] - verts[vertexIndices[i][1]]));
                 triangles[i] = new(new Vector3[] { verts[vertexIndices[i][0]], verts[vertexIndices[i][1]], verts[vertexIndices[i][2]] }, normal);
@@ -179,7 +180,7 @@ public class Gameobject
         }
         else
         {
-            for (int i = 0; i < vertexIndices.Count; i++)
+            for (int i = 0; i < vertexIndices.Count; ++i)
             {
                 triangles[i] = new(new Vector3[] { verts[vertexIndices[i][0]], verts[vertexIndices[i][1]], verts[vertexIndices[i][2]] }, new Vector3[] { norms[normalIndices[i][0]], norms[normalIndices[i][1]], norms[normalIndices[i][2]] });
             }
@@ -189,9 +190,7 @@ public class Gameobject
         if (colors.Count > 0)
         {
             foreach (Color4 c in colors)
-            {
                 averageColor += c.ToVector3();
-            }
             averageColor /= colors.Count;
         }
         else
@@ -199,7 +198,8 @@ public class Gameobject
             averageColor = Colors.White.ToVector3();
         }
 
-        Material mat = new(averageColor, 0.0f, Colors.White.ToVector3(), 0.5f, 0.0f);
+        Material mat = Material.Default;
+        mat.DiffuseColor = averageColor;
         return new(name, position, new(), new(1.0f), triangles, mat);
     }
 
@@ -223,7 +223,7 @@ public class Gameobject
         int normalsCount = 0;
         int objectIndex = -1;
 
-        for (int i = 0; i < document.Length; i++)
+        for (int i = 0; i < document.Length; ++i)
         {
 
             if (document[i] == "" || document[i][0] == '#' || document[i][0] == 'm' || document[i][0] == 'u' || document[i][0] == 's')
@@ -234,15 +234,15 @@ public class Gameobject
                 if (objectIndex > -1)
                 {
                     Vector3 pos = new();
-                    for (int j = 0; j < positions.Count; j++)
+                    for (int j = 0; j < positions.Count; ++j)
                         pos += positions[j];
                     pos /= positions.Count;
-                    for (int j = 0; j < positions.Count; j++)
+                    for (int j = 0; j < positions.Count; ++j)
                         positions[j] -= pos;
                     objs[objectIndex].Triangles = new TriNormsCol[vertexIndices.Count];
                     if (norms.Count == 0)
                     {
-                        for (int j = 0; j < vertexIndices.Count; j++)
+                        for (int j = 0; j < vertexIndices.Count; ++j)
                         {
                             Vector3 normal = Vector3.Normalize(Vector3.Cross(positions[vertexIndices[j][1]] - positions[vertexIndices[j][0]], positions[vertexIndices[j][2]] - positions[vertexIndices[j][1]]));
                             objs[objectIndex].Triangles[j] = new(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, normal);
@@ -250,7 +250,7 @@ public class Gameobject
                     }
                     else
                     {
-                        for (int j = 0; j < vertexIndices.Count; j++)
+                        for (int j = 0; j < vertexIndices.Count; ++j)
                         {
                             objs[objectIndex].Triangles[j] = new(new Vector3[] { positions[vertexIndices[j][0]], positions[vertexIndices[j][1]], positions[vertexIndices[j][2]] }, 
                                 new Vector3[] { norms[normalIndices[j][0]], norms[normalIndices[j][1]], norms[normalIndices[j][2]] });
@@ -262,9 +262,7 @@ public class Gameobject
                     if (colors.Count > 0)
                     {
                         foreach (Color4 c in colors)
-                        {
                             avgColor += c.ToVector3();
-                        }
                         avgColor /= colors.Count;
                     }
                     else
@@ -272,7 +270,8 @@ public class Gameobject
                         avgColor = Colors.White.ToVector3();
                     }
 
-                    objs[objectIndex].Material = new(avgColor, 0.0f, Colors.White.ToVector3(), 0.5f, 0.0f);
+                    objs[objectIndex].Material = Material.Default;
+                    objs[objectIndex].Material.DiffuseColor = avgColor;
                     vertexCount += verticesCount;
                     normalCount += normalsCount;
                     verticesCount = 0;
@@ -289,7 +288,7 @@ public class Gameobject
             else if (document[i].Substring(0, 2) == "v ")
             {
                 List<int> values = new();
-                for (int j = 1; j < document[i].Length; j++)
+                for (int j = 1; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == ' ')
                         values.Add(j + 1);
@@ -319,7 +318,7 @@ public class Gameobject
             else if (document[i].Substring(0, 3) == "vn ")
             {
                 List<int> values = new();
-                for (int j = 2; j < document[i].Length; j++)
+                for (int j = 2; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == ' ')
                         values.Add(j + 1);
@@ -337,7 +336,7 @@ public class Gameobject
             else if (document[i][0] == 'f')
             {
                 List<int> values = new();
-                for (int j = 1; j < document[i].Length; j++)
+                for (int j = 1; j < document[i].Length; ++j)
                 {
                     if (document[i][j] == '/')
                         values.Add(j);
@@ -376,15 +375,15 @@ public class Gameobject
             }
         }
         Vector3 position = new();
-        for (int j = 0; j < positions.Count; j++)
+        for (int j = 0; j < positions.Count; ++j)
             position += positions[j];
         position /= positions.Count;
-        for (int j = 0; j < positions.Count; j++)
+        for (int j = 0; j < positions.Count; ++j)
             positions[j] -= position;
         objs[objectIndex].Triangles = new TriNormsCol[vertexIndices.Count];
         if (norms.Count == 0)
         {
-            for (int i = 0; i < vertexIndices.Count; i++)
+            for (int i = 0; i < vertexIndices.Count; ++i)
             {
                 Vector3 normal = Vector3.Normalize(Vector3.Cross(positions[vertexIndices[i][1]] - positions[vertexIndices[i][0]], positions[vertexIndices[i][2]] - positions[vertexIndices[i][1]]));
                 objs[objectIndex].Triangles[i] = new(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, normal);
@@ -392,7 +391,7 @@ public class Gameobject
         }
         else
         {
-            for (int i = 0; i < vertexIndices.Count; i++)
+            for (int i = 0; i < vertexIndices.Count; ++i)
             {
                 Vector3 col = (colors[vertexIndices[i][0]].ToVector3() + colors[vertexIndices[i][1]].ToVector3() + colors[vertexIndices[i][2]].ToVector3()) / 3.0f;
                 objs[objectIndex].Triangles[i] = new(new Vector3[] { positions[vertexIndices[i][0]], positions[vertexIndices[i][1]], positions[vertexIndices[i][2]] }, 
@@ -405,9 +404,7 @@ public class Gameobject
         if (colors.Count > 0)
         {
             foreach (Color4 c in colors)
-            {
                 averageColor += c.ToVector3();
-            }
             averageColor /= colors.Count;
         }
         else
@@ -415,14 +412,17 @@ public class Gameobject
             averageColor = Colors.White.ToVector3();
         }
 
-        objs[objectIndex].Material = new(averageColor, 0.0f, Colors.White.ToVector3(), 0.5f, 0.0f);
+        objs[objectIndex].Material = Material.Default;
+        objs[objectIndex].Material.DiffuseColor = averageColor;
 
         return objs.ToArray();
     }
 
     private static string[] GetFileFromResource(string resource)
     {
-        Assembly assembly = Assembly.GetExecutingAssembly();
+        int endNamesp = resource.IndexOf('.');
+        string namesp = resource.Substring(0, endNamesp);
+        Assembly assembly = Assembly.Load(namesp);
 
         List<string> output = new();
         using (Stream stream = assembly.GetManifestResourceStream(resource))
@@ -444,9 +444,9 @@ public class Gameobject
         document.Add("o " + o.Name);
 
         // vertices
-        for (int i = 0; i < o.Triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; ++i)
         {
-            for (int j = 0; j < 3; j++)
+            for (int j = 0; j < 3; ++j)
             {
                 document.Add("v");
                 Vector3 v = o.Triangles[i].Vertices[j];
@@ -456,9 +456,9 @@ public class Gameobject
         }
 
         // normals
-        for (int i = 0; i < o.Triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; ++i)
         {
-            for (int j = 0; j < 3; j++)
+            for (int j = 0; j < 3; ++j)
             {
                 document.Add("vn");
                 Vector3 v = o.Triangles[i].Normals[j];
@@ -468,10 +468,10 @@ public class Gameobject
         }
 
         // faces
-        for (int i = 0; i < o.Triangles.Length; i++)
+        for (int i = 0; i < o.Triangles.Length; ++i)
         {
             document.Add("f");
-            for (int j = 0; j < 3; j++)
+            for (int j = 0; j < 3; ++j)
             {
                 document[document.Count - 1] += " " + (i * 3 + j + 1) + "//" + (i * 3 + j + 1);
             }
@@ -491,12 +491,12 @@ public class Gameobject
             List<List<int[]>> normalIndices = new();
             List<Vector3> verts = new();
             List<List<Vector3>> allNorms = new();
-            for (int i = 0; i < Triangles.Length; i++)
+            for (int i = 0; i < Triangles.Length; ++i)
             {
-                for (int j = 0; j < 3; j++)
+                for (int j = 0; j < 3; ++j)
                 {
                     int count = 0;
-                    for (int k = 0; k < verts.Count; k++)
+                    for (int k = 0; k < verts.Count; ++k)
                     {
                         if (Triangles[i].Vertices[j] == verts[k])
                         {
@@ -518,22 +518,22 @@ public class Gameobject
 
             // average the normals that have an angle less than max angle for each unique vertex
             Vector3[][] norms = new Vector3[allNorms.Count][];
-            for (int i = 0; i < allNorms.Count; i++)
+            for (int i = 0; i < allNorms.Count; ++i)
             {
                 norms[i] = new Vector3[allNorms[i].Count];
-                for (int j = 0; j < allNorms[i].Count; j++)
+                for (int j = 0; j < allNorms[i].Count; ++j)
                 {
                     List<Vector3> values = new();
                     Vector3 average = allNorms[i][j];
                     values.Add(allNorms[i][j]);
                     if (allNorms[i].Count < minVertsInPoint)
                     {
-                        for (int k = 0; k < allNorms[i].Count; k++)
+                        for (int k = 0; k < allNorms[i].Count; ++k)
                         {
                             if (j == k)
                                 continue;
                             bool skip = false;
-                            for (int m = 0; m < values.Count; m++)
+                            for (int m = 0; m < values.Count; ++m)
                             {
                                 if ((values[m] - allNorms[i][k]).Length() < 0.00001f)
                                 {
@@ -543,7 +543,7 @@ public class Gameobject
                             }
                             if (skip)
                                 continue;
-                            if (Math.Acos(Math.Min(Math.Max(Vector3.Dot(allNorms[i][j], allNorms[i][k]), -1.0f), 1.0f)) / Engine.DEG2RAD < maxAngleDeg)
+                            if (Math.Acos(Math.Min(Math.Max(Vector3.Dot(allNorms[i][j], allNorms[i][k]), -1.0f), 1.0f)) / DEG2RAD < maxAngleDeg)
                             {
                                 values.Add(allNorms[i][k]);
                                 average += allNorms[i][k];
@@ -557,19 +557,19 @@ public class Gameobject
             }
 
             // reassign normals to matching vertices
-            for (int i = 0; i < norms.Length; i++)
+            for (int i = 0; i < norms.Length; ++i)
             {
-                for (int j = 0; j < norms[i].Length; j++)
+                for (int j = 0; j < norms[i].Length; ++j)
                 {
                     Triangles[normalIndices[i][j][0]].Normals[normalIndices[i][j][1]] = norms[i][j];
                 }
             }
 
             // make sure zero length normals are last
-            for (int i = 0; i < Triangles.Length; i++)
+            for (int i = 0; i < Triangles.Length; ++i)
             {
                 int index = -1;
-                for (int j = 0; j < 3; j++)
+                for (int j = 0; j < 3; ++j)
                 {
                     if (Triangles[i].Normals[j].LengthSquared() == 0.0f)
                     {
@@ -580,7 +580,7 @@ public class Gameobject
 
                 if (index != -1)
                 {
-                    for (int j = 0; j < 2 - index; j++)
+                    for (int j = 0; j < 2 - index; ++j)
                     {
                         // cycle vertices
                         Vector3 temp = Triangles[i].Normals[2];
@@ -597,7 +597,7 @@ public class Gameobject
         }
         else // shade flat
         {
-            for (int i = 0; i < Triangles.Length; i++)
+            for (int i = 0; i < Triangles.Length; ++i)
             {
                 TriNormsCol current = Triangles[i];
                 Vector3 normal = Normalize(Vector3.Cross(current.Vertices[1] - current.Vertices[0], current.Vertices[2] - current.Vertices[1]));
@@ -608,7 +608,7 @@ public class Gameobject
 
     public void CreateMatrices()
     {
-        World = Engine.CreateWorld(Position, Rotation, Scale);
+        World = CreateWorld(Position, Rotation, Scale);
         Matrix4x4.Invert(World, out Matrix4x4 output);
         Normal = Matrix4x4.Transpose(output);
     }
@@ -658,7 +658,7 @@ public class Sphere
     {
         Position = new();
         Radius = 0.0f;
-        Material = new();
+        Material = Material.Default;
     }
 
     public Sphere(Vector3 position, float radius, Material mat)
@@ -682,7 +682,7 @@ public class Light
     public float Luminosity;
     public float NearPlane = 0.1f;
     public float FarPlane = 100.0f;
-    public int ShadowRes = 4096;
+    public int ShadowRes = 128;
     public ID3D11DepthStencilView ShadowStencilView;
     public ID3D11Texture2D1 ShadowTextures;
     public Viewport ShadowViewPort;
@@ -725,12 +725,12 @@ public class Light
 
     public void GenerateMatrix()
     {
-        ShadowMatrices[0] = Engine.CreateView(Position, new(0.0f, 90.0f, 0.0f)) * ShadowProjectionMatrix;
-        ShadowMatrices[1] = Engine.CreateView(Position, new(0.0f, -90.0f, 0.0f)) * ShadowProjectionMatrix;
-        ShadowMatrices[2] = Engine.CreateView(Position, new(-90.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
-        ShadowMatrices[3] = Engine.CreateView(Position, new(90.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
-        ShadowMatrices[4] = Engine.CreateView(Position, new(0.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
-        ShadowMatrices[5] = Engine.CreateView(Position, new(0.0f, 180.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[0] = CreateView(Position, new(0.0f, 90.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[1] = CreateView(Position, new(0.0f, -90.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[2] = CreateView(Position, new(-90.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[3] = CreateView(Position, new(90.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[4] = CreateView(Position, new(0.0f, 0.0f, 0.0f)) * ShadowProjectionMatrix;
+        ShadowMatrices[5] = CreateView(Position, new(0.0f, 180.0f, 0.0f)) * ShadowProjectionMatrix;
     }
 
 }
@@ -767,7 +767,7 @@ public class TriNormsCol
     {
         Vector4[] vs = new Vector4[3];
         Vector4[] ns = new Vector4[3];
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 3; ++i)
         {
             vs[i] = new(Vertices[i], 1.0f);
             ns[i] = new(Normals[i], 0.0f);

@@ -3,10 +3,19 @@
   <PropertyGroup>
     <TargetFramework>net6.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
-	<PlatformTarget>x64</PlatformTarget>
-	
     <IsPackable>false</IsPackable>
+    <IsPublishable>False</IsPublishable>
+	<PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="TestShaders.hlsl" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="TestShaders.hlsl" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.1.0" />
@@ -17,6 +26,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DXRenderEngine\DXRenderEngine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Results\" />
   </ItemGroup>
 
 </Project>

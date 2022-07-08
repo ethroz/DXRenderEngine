@@ -1,45 +1,54 @@
 ﻿using System;
 using System.Numerics;
 using System.Windows.Forms;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
 public class EngineDescription
 {
-    public ProjectionDescription ProjectionDesc { get; internal set; }
-    public int Width { get; internal set; }
-    public int Height { get; internal set; }
-    public int RefreshRate { get; internal set; }
+    public ProjectionDescription ProjectionDesc { get; private set; }
+    public string ShaderResource { get; protected set; }
+    public int Width { get; private set; }
+    public int Height { get; private set; }
+    public int RefreshRate { get; private set; }
     public readonly Action Setup, Start, Update, UserInput;
-    public FormWindowState WindowState;
+    public FormWindowState WindowState { get; internal set; }
+    public bool Resizeable { get; private set; }
     public bool UseShaderCache { get; private set; }
 
-    public EngineDescription(ProjectionDescription projectionDesc, int width = 640, int height = 480,
+    public EngineDescription(ProjectionDescription projectionDesc, string shaderResource, int width = 640, int height = 480,
         int refreshRate = 60, Action setup = null, Action start = null, Action update = null,
-        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool cache = false)
+        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool resizeable = true, bool cache = false)
     {
-        ProjectionDesc = projectionDesc;
+        ProjectionDesc = new(projectionDesc.FOVVDegrees, projectionDesc.NearPlane, projectionDesc.FarPlane, (float)width / height);
+        ShaderResource = shaderResource;
         Width = width;
         Height = height;
         RefreshRate = refreshRate;
-        if (setup == null)
-            Setup = Empty;
-        else
-            Setup = setup;
-        if (start == null)
-            Start = Empty;
-        else
-            Start = start;
-        if (update == null)
-            Update = Empty;
-        else
-            Update = update;
-        if (userInput == null)
-            UserInput = Empty;
-        else
-            UserInput = userInput;
+        Setup = setup == null ? Empty :setup;
+        Start = start == null ? Empty : start;
+        Update = update == null ? Empty : update;
+        UserInput = userInput;
         WindowState = windowState;
+        Resizeable = resizeable;
         UseShaderCache = cache;
+    }
+
+    public EngineDescription(EngineDescription copy)
+    {
+        ProjectionDesc = copy.ProjectionDesc;
+        ShaderResource = copy.ShaderResource;
+        Width = copy.Width;
+        Height = copy.Height;
+        RefreshRate = copy.RefreshRate;
+        Setup = copy.Setup;
+        Start = copy.Start;
+        Update = copy.Update;
+        UserInput = copy.UserInput;
+        WindowState = copy.WindowState;
+        Resizeable = copy.Resizeable;
+        UseShaderCache = copy.UseShaderCache;
     }
 
     private void Empty() { }
@@ -48,62 +57,59 @@ public class EngineDescription
 public class RasterizingEngineDescription : EngineDescription
 {
     public bool Wireframe, Shadows, PostProcess;
+    private const string shader = "DXRenderEngine.DXRenderEngine.RasterShaders.hlsl";
 
-    public RasterizingEngineDescription(EngineDescription ED, bool wireframe = false, bool shadows = false, 
-        bool postProcess = false) : base(ED.ProjectionDesc, ED.Width, ED.Height, ED.RefreshRate, ED.Setup, 
-            ED.Start, ED.Update, ED.UserInput, ED.WindowState, ED.UseShaderCache)
+    public RasterizingEngineDescription(EngineDescription ED, bool wireframe = false, bool shadows = false, bool postProcess = false)
+        : base(ED)
     {
+        ShaderResource = shader;
         Wireframe = wireframe;
         Shadows = shadows;
         PostProcess = postProcess;
     }
 
-    public RasterizingEngineDescription(ProjectionDescription projectionDesc, int width = 640, int height = 480,
-        int refreshRate = 60, Action setup = null, Action start = null, Action update = null,
-        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool cache = false, bool wireframe = false,
-        bool shadows = false, bool postProcess = false) : base(projectionDesc, width, height, refreshRate, setup,
-            start, update, userInput, windowState, cache)
+    public RasterizingEngineDescription(RasterizingEngineDescription copy) : base(copy)
     {
-        Shadows = shadows;
-        PostProcess = postProcess;
-        Wireframe = wireframe;
+        ShaderResource = shader;
+        Wireframe = copy.Wireframe;
+        Shadows = copy.Shadows;
+        PostProcess = copy.PostProcess;
     }
 }
 
 public class RayTracingEngineDescription : EngineDescription
 {
     public int RayDepth;
+    private const string shader = "DXRenderEngine.DXRenderEngine.RayShaders.hlsl";
 
-    public RayTracingEngineDescription(EngineDescription ED, int rayDepth = 1) : base(ED.ProjectionDesc, 
-        ED.Width, ED.Height, ED.RefreshRate, ED.Setup, ED.Start, ED.Update, ED.UserInput, ED.WindowState, ED.UseShaderCache)
+    public RayTracingEngineDescription(EngineDescription ED, int rayDepth = 1) : base(ED)
     {
+        ShaderResource = shader;
         RayDepth = rayDepth;
     }
 
-    public RayTracingEngineDescription(ProjectionDescription projectionDesc, int width = 640, int height = 480,
-        int refreshRate = 60, Action setup = null, Action start = null, Action update = null,
-        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool cache = false, int rayDepth = 1) : 
-        base(projectionDesc, width, height, refreshRate, setup, start, update, userInput, windowState, cache)
+    public RayTracingEngineDescription(RayTracingEngineDescription copy) : base(copy)
     {
-        RayDepth = rayDepth;
+        ShaderResource = shader;
+        RayDepth = copy.RayDepth;
     }
 }
 
 public struct ProjectionDescription
 {
-    public readonly float FOVVDegrees, AspectRatioWH, NearPlane, FarPlane;
-    public static readonly ProjectionDescription Default = new(60.0f, 16.0f / 9.0f, 0.01f, 1000.0f);
+    public readonly float FOVVDegrees, NearPlane, FarPlane, AspectRatioWH;
+    public static readonly ProjectionDescription Default = new(60.0f, 0.01f, 1000.0f, 16.0f / 9.0f);
 
-    public ProjectionDescription(float fovVDegrees, float aspectRatioHW, float nearPlane, float farPlane)
+    public ProjectionDescription(float fovVDegrees, float nearPlane, float farPlane, float aspectRatioHW = 1.0f)
     {
         FOVVDegrees = fovVDegrees;
-        AspectRatioWH = aspectRatioHW;
         NearPlane = nearPlane;
         FarPlane = farPlane;
+        AspectRatioWH = aspectRatioHW;
     }
 
     public Matrix4x4 GetMatrix()
     {
-        return Engine.CreateProjection(FOVVDegrees, AspectRatioWH, NearPlane, FarPlane);
+        return CreateProjection(FOVVDegrees, AspectRatioWH, NearPlane, FarPlane);
     }
 }

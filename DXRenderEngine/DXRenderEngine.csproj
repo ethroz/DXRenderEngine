@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net6.0-windows</TargetFramework>
+	<TargetFramework>net6.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
     <AutoGenerateBindingRedirects>True</AutoGenerateBindingRedirects>
     <IncludeAllContentForSelfExtract>True</IncludeAllContentForSelfExtract>
@@ -10,10 +10,8 @@
     <StartupObject>Program</StartupObject>
     <PlatformTarget>x64</PlatformTarget>
 	<UseWindowsForms>True</UseWindowsForms>
-	<UseWPF>False</UseWPF>
 	<ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
-
   <ItemGroup>
     <None Remove="DXRenderEngine\RasterShaders.hlsl" />
     <None Remove="DXRenderEngine\RayShaders.hlsl" />
@@ -21,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="DXRenderEngine\RayShaders.hlsl" />
     <EmbeddedResource Include="DXRenderEngine\RasterShaders.hlsl" />
+    <EmbeddedResource Include="DXRenderEngine\RayShaders.hlsl" />
     <EmbeddedResource Include="Objects\Objects.obj" />
   </ItemGroup>
 

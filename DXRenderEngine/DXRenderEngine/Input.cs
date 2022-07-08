@@ -57,26 +57,28 @@ public class Input : IDisposable
                     break;
             }
         }
+        Trace.Assert(mouse != null);
+        Trace.Assert(keyboard != null);
         InitializeKeyboard();
         InitializeMouse();
     }
 
     private void InitializeMouse()
     {
-        mouse.Acquire();
+        Trace.Assert(mouse.Acquire().Success);
         MouseState state = mouse.GetCurrentMouseState();
         var allButtons = state.Buttons;
         buttons = new Button[allButtons.Length];
-        for (int i = 0; i < allButtons.Length; i++)
+        for (int i = 0; i < allButtons.Length; ++i)
             buttons[i] = new();
         GetCursorPos(out mousePos);
     }
 
     private void InitializeKeyboard()
     {
-        keyboard.Acquire();
+        Trace.Assert(keyboard.Acquire().Success);
         cheyArray = new Chey[KEYBOARD_BUFFER_SIZE];
-        for (int i = 0; i < KEYBOARD_BUFFER_SIZE; i++)
+        for (int i = 0; i < KEYBOARD_BUFFER_SIZE; ++i)
         {
             char[] keySpelling = ((Key)i).ToString().ToCharArray();
             bool containsLetter = false;
@@ -99,7 +101,7 @@ public class Input : IDisposable
     {
         var state = mouse.GetCurrentMouseState();
         var butons = state.Buttons;
-        for (int i = 0; i < butons.Length; i++)
+        for (int i = 0; i < butons.Length; ++i)
         {
             bool pressed = butons[i];
             buttons[i].Down = buttons[i].Raised && pressed;
@@ -115,7 +117,7 @@ public class Input : IDisposable
     public void GetKeys()
     {
         KeyboardState state = keyboard.GetCurrentKeyboardState();
-        for (int i = 0; i < KEYBOARD_BUFFER_SIZE; i++)
+        for (int i = 0; i < KEYBOARD_BUFFER_SIZE; ++i)
         {
             if (cheyArray[i] == null)
                 continue;
@@ -234,15 +236,23 @@ public class Input : IDisposable
 
     protected virtual void Dispose(bool boolean)
     {
-        mouse.Unacquire();
-        mouse.Release();
-        keyboard.Unacquire();
-        keyboard.Release();
+        Trace.Assert(mouse != null);
+        if (mouse.NativePointer != IntPtr.Zero)
+        {
+            mouse.Unacquire();
+            mouse.Dispose();
+        }
+        Trace.Assert(keyboard != null);
+        if (keyboard.NativePointer != IntPtr.Zero)
+        {
+            keyboard.Unacquire();
+            keyboard.Dispose();
+        }
     }
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT lpPoint);
 
-    [DllImport("kernel32.dll")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
 }

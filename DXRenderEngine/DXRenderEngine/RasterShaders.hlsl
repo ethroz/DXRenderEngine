@@ -3,17 +3,38 @@
 /////////////////////////////////////////
 
 #define NUM_LIGHTS 1
+#define RCP_SQRT3 0.57735026919f
+#define QUARTER_PI 0.78539816339f
 #define PI 3.14159265359f
 #define TWO_PI 6.28318530718f
-#define DEPTH_BIAS 2.0f
-#define NORMAL_BIAS 2.0f
-#define THIC 0.00001f
+#define DEPTH_BIAS 0.0f
+#define SOFTNESS 1.0f
+#define SAMPLE_COUNT 4u
+#define EXPOSURE 1.5f
 #define ATMOSPHERE_DIR float3(0.0f, 1.0f, 0.0f)
 #define RED float3(1.0f, 0.0f, 0.0f)
 #define GREEN float3(0.0f, 1.0f, 0.0f)
 #define BLUE float3(0.0f, 0.0f, 1.0f)
 #define MAGENTA float3(1.0f, 0.0f, 1.0f)
 #define CYAN float3(0.0f, 1.0f, 1.0f)
+
+static float3 AXES[6] =
+{
+	float3(-1.0f, 0.0f, 0.0f),
+	float3(1.0f, 0.0f, 0.0f),
+	float3(0.0f, -1.0f, 0.0f),
+	float3(0.0f, 1.0f, 0.0f),
+	float3(0.0f, 0.0f, -1.0f),
+	float3(0.0f, 0.0f, 1.0f)
+};
+
+static float3 SAMPLES[SAMPLE_COUNT] =
+{
+	float3(-RCP_SQRT3, -RCP_SQRT3, -RCP_SQRT3),
+	float3(-RCP_SQRT3,  RCP_SQRT3,  RCP_SQRT3),
+	float3( RCP_SQRT3, -RCP_SQRT3,  RCP_SQRT3),
+	float3( RCP_SQRT3,  RCP_SQRT3, -RCP_SQRT3)
+};
 
 /////////////////////////////////////////
 //             Structures              //
@@ -36,13 +57,15 @@ struct VertexShaderOutput
 struct GeometryInputType
 {
 	float4 position : SV_POSITION;
+	float3 normal : NORMAL;
 };
 
 struct PixelInputType
 {
 	float4 position : SV_POSITION;
+	float3 normal : NORMAL;
+	uint index : SV_RENDERTARGETARRAYINDEX;
 	float3 light : POSITION;
-	uint index : SV_RenderTargetArrayIndex;
 };
 
 struct PixelShaderOutput
@@ -72,6 +95,16 @@ struct Light
 	float res;
 	float far;
 	float2 padding;
+};
+
+struct Material
+{
+	float3 diffuse; // kd; ka = kd * atmosphere
+	float rough; // sqrt(alpha)
+	float3 spec; // ks
+	float shine; // s
+	float ior; // IOR
+	float3 padding;
 };
 
 /////////////////////////////////////////
@@ -104,9 +137,7 @@ cbuffer PerLight : register(b2)
 {
 	matrix LightMatrices[6];
 	uint index;
-	float DepthBias;
-	float NormalBias;
-	bool Line;
+	float3 padding;
 }
 
 cbuffer PerObject : register(b3)
@@ -115,12 +146,7 @@ cbuffer PerObject : register(b3)
 	matrix worldMat;
 	matrix normalMat;
 	// Material stuff
-	float3 diffuse; // kd; ka = kd * atmosphere
-	float rough; // sqrt(alpha)
-	float3 spec; // ks
-	float shine; // s
-	float ior; // IOR
-	float3 padding2;
+	Material material;
 }
 
 /////////////////////////////////////////
@@ -201,7 +227,6 @@ float Fresnel(float ior, float3 view, float3 middle)
 	return F0 + (1.0f - F0) * Pow5(1.0f - dot(view, middle));
 }
 
-
 /////////////////////////////////////////
 //        Shader Entry Points          //
 /////////////////////////////////////////
@@ -209,7 +234,10 @@ float Fresnel(float ior, float3 view, float3 middle)
 // shadow map rasterizer
 GeometryInputType shadowVertexShader(VertexShaderInput In)
 {
-	return (GeometryInputType)mul(worldMat, float4(In.position, 1.0f));
+	GeometryInputType Out;
+	Out.position = mul(worldMat, float4(In.position, 1.0f));
+	Out.normal = mul((float3x3)normalMat, In.normal);
+	return Out;
 }
 
 [maxvertexcount(18)]
@@ -223,8 +251,9 @@ void shadowGeometryShader(triangle GeometryInputType In[3], inout TriangleStream
 		{
 			PixelInputType Out;
 			Out.position = mul(LightMatrices[i], In[j].position);
-			Out.light = In[j].position.xyz - Lights[index].position;
+			Out.normal = In[j].normal;
 			Out.index = i;
+			Out.light = Lights[index].position - In[j].position.xyz;
 			triStream.Append(Out);
 		}
 		triStream.RestartStrip();
@@ -233,7 +262,14 @@ void shadowGeometryShader(triangle GeometryInputType In[3], inout TriangleStream
 
 float shadowPixelShader(PixelInputType In) : SV_DEPTH
 {
-	return length(In.light) / Lights[index].far;
+	float depth = length(In.light);
+	In.light /= depth;
+	depth /= Lights[index].far;
+	float cosTheta = dot(normalize(In.normal), In.light);
+	if (cosTheta < 0.0f)
+		return 1.0f;
+	float bias = (2.82f * depth * square(dot(-AXES[In.index], In.light)) * tan(acos(cosTheta)) + DEPTH_BIAS) / Lights[index].res;
+	return depth + bias;
 }
 
 // object lighting rasterizer
@@ -241,8 +277,7 @@ VertexShaderOutput vertexShader(VertexShaderInput In)
 {
 	VertexShaderOutput Out;
 	Out.position = mul(worldMat, float4(In.position, 1.0f));
-	//Out.view = EyePos - Out.position.xyz;
-	Out.view = Out.position.xyz;
+	Out.view = EyePos - Out.position.xyz;
 	[unroll]
 	for (uint i = 0; i < NUM_LIGHTS; ++i)
 	{
@@ -259,58 +294,39 @@ PixelShaderOutput pixelShader(VertexShaderOutput In)
 	PixelShaderOutput Out;
 	Out.depth = In.position.z; // output depth is screenspace depth
 	Out.color = float4(0.0f, 0.0f, 0.0f, In.position.w); // post process uses alpha for real depth
+	//Out.color = float4(1.0f, 1.0f, 1.0f, In.position.w); // post process uses alpha for real depth
 	In.normal = normalize(In.normal); // Normalize the input normal
 
-	// all light calculations
+	// All light calculations
 	[unroll]
 	for (uint i = 0; i < NUM_LIGHTS; ++i)
 	{
 		// Depth calculations
-		float depth = length(In.shadowRays[i]);
-		float3 lightDir = -In.shadowRays[i] / depth; // normalize and flip the shadowRay to get the lightDir;
-		// bias
-		float cosTheta = dot(In.normal, lightDir);
-		float theta = acos(cosTheta) / PI * 180.0f;
-		//if (Line && abs(theta - NormalBias) < 0.001f) // select normal
-		//if (Line && (abs(theta - NormalBias) < 0.001f || abs(abs(In.view.x) - abs(In.view.z)) < 0.001f)) // xz plane x, select normal
-		//if (Line && (abs(theta - NormalBias) < THIC || abs(abs(In.view.x) - abs(In.view.z)) < THIC || abs(abs(In.view.x) - abs(In.view.y)) < THIC || abs(abs(In.view.y) - abs(In.view.z)) < THIC)) // 3d x, select normal
-		if (Line && (abs(sqrt(square(In.view.x) + square(In.view.y)) - abs(In.view.z)) < THIC || lengthSqr(In.view) < THIC / 100.0f)) // z-cone x with dot
-		//if (Line && abs(sqrt(square(In.view.x) + square(In.view.y)) - abs(In.view.z)) < THIC) // x no dot
-		{
-			Out.color.rgb = RED;
-			return Out;
-		}
-
-		//float cosTheta = dot(In.normal, lightDir);
-		//if (cosTheta < 0.0f) // we don't want bias behind shadows.
-		//{
-		//	cosTheta = 1.0f;
-		//}
-		//float bias = tan(acos(cosTheta)) / Lights[i].res;
-		//float bias = (DepthBias + NormalBias * tan(acos(cosTheta))) / Lights[i].res;
-		//bias = clamp(bias, 0.0f, 0.01f);
-		//float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far - bias);
-		float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far - DepthBias / Lights[i].res);
-		Out.color.rgb = shadow >= 1.0f ? 1.0f : 0.0f;
-		return Out;
-		//float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth / Lights[i].far);
+		float depth = length(In.shadowRays[i]) / Lights[i].far;
+		float shadow = ShadowTextures[i].SampleCmpLevelZero(DepthSampler, In.shadowRays[i], depth);
 
 		// Color calculations
+		float3 lightDir = -normalize(In.shadowRays[i]); // normalize and flip the shadowRay to get the lightDir
 		float lamb = dot(lightDir, In.normal);
 		if (lamb > 0.0f)
 		{
 			// Cook-Torrance BRDF model
 			float3 viewDir = normalize(In.view);
-			float alpha = square(rough);
+			float alpha = square(material.rough);
 			float3 middle = normalize(lightDir + viewDir);
 			float D = NormalDistribution(alpha, In.normal, middle);
 			float G = Geometric(viewDir, lightDir, middle, In.normal, alpha);
-			float F = Fresnel(ior, viewDir, middle);
+			float F = Fresnel(material.ior, viewDir, middle);
 			float rs = D * G * F / (4.0f * dot(In.normal, viewDir));
-			Out.color.rgb += Lights[i].color * shadow * (lamb * (1.0f - shine) * diffuse + shine * rs * spec);
+			Out.color.rgb += Lights[i].color * shadow * (lamb * (1.0f - material.shine) * material.diffuse + material.shine * rs * material.spec);
 		}
 	}
 
+	// hdr thyme
+	Out.color.rgb = 1.0f - exp(-EXPOSURE * Out.color.rgb);
+
+	// temporal denoiser
+	Out.color.rgb += ((random(In.position.xy) - 0.5f) / 255.0f);
 	return Out;
 }
 
@@ -350,9 +366,9 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	//float kernel1[9] = { 1, 0, -1, 2, 0, -2, 1, 0, -1 };
 	//float kernel2[9] = { 1, 2, 1, 0, 0, 0, -1, -2, -1 };
 	//float kernel3[9] = { 0.2, 0, 0.2, 0, 0.2, 0, 0.2, 0, 0.2 };
-	//for (int i = 0; i < 3; i++)
+	//for (int i = 0; i < 3; ++i)
 	//{
-	//	for (int j = 0; j < 3; j++)
+	//	for (int j = 0; j < 3; ++j)
 	//	{
 	//		horizontal += kernel1[i * 3 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 1, i - 1)) / float2(Width, Height)).rgb;
 	//		vertical += kernel2[i * 3 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 1, i - 1)) / float2(Width, Height)).rgb;
@@ -371,9 +387,9 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	//if (LightIndex == 1)
 	//	return value;
 	//float3 color = 0.0f;
-	//for (int i = 0; i < 3; i++)
+	//for (int i = 0; i < 3; ++i)
 	//{
-	//	for (int j = 0; j < 3; j++)
+	//	for (int j = 0; j < 3; ++j)
 	//	{
 	//		color += kernel3[i * 3 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 1, i - 1)) / float2(Width, Height)).rgb;
 	//	}
@@ -458,9 +474,9 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	//float3 vert = 0.0f;
 	//float kernel1[9] = { 1, 0, -1, 2, 0, -2, 1, 0, -1 };
 	//float kernel2[9] = { 1, 2, 1, 0, 0, 0, -1, -2, -1 };
-	//for (int i = 0; i < 3; i++)
+	//for (int i = 0; i < 3; ++i)
 	//{
-	//	for (int j = 0; j < 3; j++)
+	//	for (int j = 0; j < 3; ++j)
 	//	{
 	//		horz += kernel1[i * 3 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 1, i - 1)) / float2(Width, Height)).rgb;
 	//		vert += kernel2[i * 3 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 1, i - 1)) / float2(Width, Height)).rgb;
@@ -551,7 +567,7 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	//	return ShaderTexture.Sample(ColorSampler, In.position.xy / float2(Width, Height)).rgb;
 	//float3 color;
 	//float3 totals;
-	//for (uint i = 0; i < 2 * quality + 1; i++)
+	//for (uint i = 0; i < 2 * quality + 1; ++i)
 	//{
 	//	float2 pos;
 	//	if (i == 0)
@@ -580,9 +596,9 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	float3 color = 0.0f;
 	int total = 0;
 	float quality = abs(focus) * 3.0f;
-	for (int i = 0; i < 2 * quality + 1; i++)
+	for (int i = 0; i < 2 * quality + 1; ++i)
 	{
-		for (int j = 0; j < 2 * quality + 1; j++)
+		for (int j = 0; j < 2 * quality + 1; ++j)
 		{
 			float2 offset = float2(j - quality, i - quality);
 			if (length(offset) <= quality)
@@ -594,88 +610,6 @@ float3 postProcessPixelShader(TextureShaderOutput In) : SV_Target
 	}
 	color /= total;
 	return color;
-}
-
-float4 shadowBlurPixelShader(TextureShaderOutput In) : SV_Target
-{
-	// no blur
-
-	//float4 color = 0.0f;
-	//color.rgb = ShaderTexture.Sample(ColorSampler, In.tex).rgb;
-	//return color;
-
-	// mipmap
-
-	//float4 color = 0.0f;
-	//color.a = ShaderTexture.SampleLevel(ColorSampler, In.tex, 0).a;
-	//color.rgb += ShaderTexture.SampleLevel(ColorSampler, In.tex, 1).rgb;
-	//color.rgb += ShaderTexture.SampleLevel(ColorSampler, In.tex, 2).rgb * 2.0f;
-	//color.rgb += ShaderTexture.SampleLevel(ColorSampler, In.tex, 3).rgb * 3.0f;
-	//color.rgb /= 6.0f;
-	//return color;
-
-	// gaussian
-
-	//float4 color = 0.0f;
-	//color.a = ShaderTexture.Sample(ColorSampler, In.tex).a;
-	//float kernel[49] = { 0, 0, 0, 5, 0, 0, 0, 0, 5, 18, 32, 18, 5, 0, 0, 18, 64, 100, 64, 18, 0, 5, 32, 100, 100, 100, 32, 5, 0, 18, 64, 100, 64, 18, 0, 0, 5, 18, 32, 18, 5, 0, 0, 0, 0, 5, 0, 0, 0 };
-	//float total = 0.0f;
-	//for (int i = 0; i < 7; i++)
-	//{
-	//	for (int j = 0; j < 7; j++)
-	//	{
-	//		if (abs(ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 3, i - 3)) / float2(Width, Height)).a - color.a) < 0.1f)
-	//		{
-	//			color.rgb += kernel[i * 7 + j] * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 3, i - 3)) / float2(Width, Height)).rgb;
-	//			total += kernel[i * 7 + j];
-	//		}
-	//	}
-	//}
-	//color.rgb /= total;
-	//return color;
-
-	// custom gaussian
-
-	float4 color = 0.0f;
-	float2 col = ShaderTexture.Sample(ColorSampler, In.tex).ra;
-	color.a = col.y;
-	int quality = 5;
-	int max = 2 * quality * quality + 1;
-	float total = 0.0f;
-	for (int i = 0; i < 2 * quality + 1; i++)
-	{
-		for (int j = 0; j < 2 * quality + 1; j++)
-		{
-			if (abs(ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 3, i - 3)) / float2(Width, Height)).a - color.a) < 0.1f)
-			{
-				float coefficient = max - (i - quality) * (i - quality) - (j - quality) * (j - quality);
-				color.rgb += coefficient * ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - 3, i - 3)) / float2(Width, Height)).rgb;
-				total += coefficient;
-			}
-		}
-	}
-	color.rgb /= total;
-	return color;
-
-	// box
-
-	//int quality = 5;
-	//float4 color = 0.0f;
-	//color.a = ShaderTexture.Sample(ColorSampler, In.tex).a;
-	//float total = 0.0f;
-	//for (int i = 0; i < 2 * quality + 1; i++)
-	//{
-	//	for (int j = 0; j < 2 * quality + 1; j++)
-	//	{
-	//		if (abs(ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - quality, i - quality)) / float2(Width, Height)).a - color.a) < 0.1f)
-	//		{
-	//			color.rgb += ShaderTexture.Sample(ColorSampler, (In.position.xy + float2(j - quality, i - quality)) / float2(Width, Height)).rgb;
-	//			total += 1.0f;
-	//		}
-	//	}
-	//}
-	//color.rgb /= total;
-	//return color;
 }
 
 // texture shader

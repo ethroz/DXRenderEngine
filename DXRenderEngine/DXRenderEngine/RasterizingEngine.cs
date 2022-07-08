@@ -1,59 +1,44 @@
-﻿using System;
-using System.IO;
-using System.Numerics;
-using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Text;
+﻿using System.Text;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
 /// <summary>
-/// ToDo
+/// TODO
 ///     pcf/pcs
 /// </summary>
-public sealed class RasterizingEngine : Engine
+public class RasterizingEngine : Engine
 {
     public new readonly RasterizingEngineDescription Description;
 
-    private ID3D11RasterizerState2 shadowRasterizer;
-    private ID3D11VertexShader shadowVertexShader;
-    private ID3D11GeometryShader shadowGeometryShader;
-    private ID3D11PixelShader shadowPixelShader;
+    protected ID3D11RasterizerState2 shadowRasterizer;
+    protected ID3D11VertexShader shadowVertexShader;
+    protected ID3D11GeometryShader shadowGeometryShader;
+    protected ID3D11PixelShader shadowPixelShader;
 
-    private ID3D11DepthStencilState depthState;
-    private ID3D11Texture2D1 depthBuffer;
-    private ID3D11DepthStencilView depthView;
+    protected ID3D11DepthStencilState depthState;
+    protected ID3D11Texture2D1 depthBuffer;
+    protected ID3D11DepthStencilView depthView;
 
-    private ID3D11RasterizerState2 lightingRasterizer;
-    private ID3D11Texture2D1 lightViewTexture;
-    private ID3D11RenderTargetView1 lightingTargetView;
+    protected ID3D11RasterizerState2 lightingRasterizer;
+    protected ID3D11Texture2D1 lightViewTexture;
+    protected ID3D11RenderTargetView1 lightingTargetView;
 
-    private ID3D11Buffer[] buffers;
-    private ID3D11SamplerState[] samplers;
-    private ID3D11ShaderResourceView1[] shadowMaps;
+    protected ID3D11SamplerState[] samplers;
+    protected ID3D11ShaderResourceView1[] shadowMaps;
 
-    private RasterApplicationBuffer applicationData;
-    private RasterFrameBuffer frameData;
-    private RasterLightBuffer lightData;
-    private RasterObjectBuffer objectData;
-    private RasterPackedLight[] packedLights;
+    protected RasterPackedLight[] packedLights;
+
+    protected static readonly Color4 backgroundColor = new Color4(0.0f, 0.0f, 0.0f, float.PositiveInfinity);
 
     public RasterizingEngine(RasterizingEngineDescription ED) : base(ED)
     {
         Description = ED;
-        Assembly assembly = Assembly.GetExecutingAssembly();
-        string resourceName = "DXRenderEngine.DXRenderEngine.RasterShaders.hlsl";
-
-        using (Stream stream = assembly.GetManifestResourceStream(resourceName))
-        using (StreamReader reader = new(stream))
-        {
-            shaderCode = reader.ReadToEnd();
-        }
     }
 
     protected override void UpdateShaderConstants()
@@ -113,7 +98,7 @@ public sealed class RasterizingEngine : Engine
             optionFlags: ResourceOptionFlags.TextureCube);
 
         shadowMaps = new ID3D11ShaderResourceView1[lights.Count];
-        for (int i = 0; i < lights.Count; i++)
+        for (int i = 0; i < lights.Count; ++i)
         {
             td.Width = td.Height = lights[i].ShadowRes;
             lights[i].ShadowTextures = device.CreateTexture2D1(td);
@@ -136,6 +121,7 @@ public sealed class RasterizingEngine : Engine
 #if DEBUG
         sf = ShaderFlags.Debug;
 #endif
+
         Compiler.Compile(shaderCode, null, null, "shadowVertexShader", "VertexShader", "vs_5_0", sf, out Blob shaderBlob, out Blob errorCode);
         if (shaderBlob == null)
             throw new("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
@@ -165,7 +151,7 @@ public sealed class RasterizingEngine : Engine
 
         // depth sampler
         ssdesc = new(
-            Filter.ComparisonAnisotropic,
+            Filter.ComparisonMinMagMipLinear,
             TextureAddressMode.Border, 
             TextureAddressMode.Border, 
             TextureAddressMode.Border,
@@ -176,97 +162,73 @@ public sealed class RasterizingEngine : Engine
         context.PSSetSamplers(0, 2, samplers);
     }
 
-    protected unsafe override void SetConstantBuffers()
+    protected override void SetConstantBuffers()
     {
         base.SetConstantBuffers();
 
-        buffers = new ID3D11Buffer[4];
-        applicationData = new();
-        frameData = new();
-        lightData = new();
-        objectData = new();
         packedLights = new RasterPackedLight[lights.Count];
         PackLights();
 
-        BufferDescription bd = new(Marshal.SizeOf(applicationData), BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
-        buffers[0] = device.CreateBuffer(bd);
-        bd.SizeInBytes = Marshal.SizeOf(frameData) + Marshal.SizeOf(packedLights[0]) * packedLights.Length;
-        buffers[1] = device.CreateBuffer(bd);
-        bd.SizeInBytes = Marshal.SizeOf(lightData);
-        buffers[2] = device.CreateBuffer(bd);
-        bd.SizeInBytes = Marshal.SizeOf(objectData);
-        buffers[3] = device.CreateBuffer(bd);
-
-        context.VSSetConstantBuffers(0, 4, buffers);
+        context.VSSetConstantBuffers(0, cBuffers.Length, buffers);
         context.GSSetConstantBuffer(1, buffers[1]);
         context.GSSetConstantBuffer(2, buffers[2]);
-        context.PSSetConstantBuffers(0, 4, buffers);
+        context.PSSetConstantBuffers(0, cBuffers.Length, buffers);
     }
 
-    protected override unsafe void PerApplicationUpdate()
+    protected override void PerApplicationUpdate()
     {
         base.PerApplicationUpdate();
 
-        applicationData = new(Description.ProjectionDesc.GetMatrix(), LowerAtmosphere, UpperAtmosphere, Width, Height);
+        cBuffers[0].Insert(Description.ProjectionDesc.GetMatrix(), 0);
+        cBuffers[0].Insert(LowerAtmosphere, 1);
+        cBuffers[0].Insert(Width, 2);
+        cBuffers[0].Insert(UpperAtmosphere, 3);
+        cBuffers[0].Insert(Height, 4);
 
-        MappedSubresource resource = context.Map(buffers[0], MapMode.WriteDiscard);
-        Marshal.StructureToPtr(applicationData, resource.DataPointer, true);
-        context.Unmap(buffers[0]);
+        UpdateConstantBuffer(0, MapMode.WriteDiscard);
     }
 
     protected override void PerFrameUpdate()
     {
         base.PerFrameUpdate();
 
-        frameData = new(CreateView(EyePos, EyeRot), EyePos, sw.ElapsedTicks % 60L);
         PackLights();
-        for (int i = 0; i < lights.Count; i++)
-            lights[i].GenerateMatrix();
 
-        MappedSubresource resource = context.Map(buffers[1], MapMode.WriteNoOverwrite);
-        IntPtr pointer = resource.DataPointer;
-        Marshal.StructureToPtr(frameData, pointer, true);
-        pointer += Marshal.SizeOf(frameData);
-        WriteStructArray(packedLights, ref pointer);
-        context.Unmap(buffers[1]);
+        cBuffers[1].Insert(CreateView(EyePos, EyeRot), 0);
+        cBuffers[1].Insert(EyePos, 1);
+        cBuffers[1].Insert((float)(sw.ElapsedTicks % 60L), 2);
+        cBuffers[1].InsertArray(packedLights, 3);
+
+        foreach (var l in lights)
+            l.GenerateMatrix();
+
+        UpdateConstantBuffer(1);
     }
 
     protected override void PerLightUpdate(int index)
     {
         base.PerLightUpdate(index);
 
-        lightData.LightMatrixRight = lights[index].ShadowMatrices[0];
-        lightData.LightMatrixLeft = lights[index].ShadowMatrices[1];
-        lightData.LightMatrixUp = lights[index].ShadowMatrices[2];
-        lightData.LightMatrixDown = lights[index].ShadowMatrices[3];
-        lightData.LightMatrixForward = lights[index].ShadowMatrices[4];
-        lightData.LightMatrixBackward = lights[index].ShadowMatrices[5];
-        lightData.Index = (uint)index;
-        lightData.DepthBias = DepthBias;
-        lightData.NormalBias = NormalBias;
-        lightData.Line = Line;
+        cBuffers[2].InsertArray(lights[index].ShadowMatrices, 0);
+        cBuffers[2].Insert((uint)index, 6);
 
-        MappedSubresource resource = context.Map(buffers[2], MapMode.WriteDiscard);
-        Marshal.StructureToPtr(lightData, resource.DataPointer, true);
-        context.Unmap(buffers[2]);
+        UpdateConstantBuffer(2, MapMode.WriteDiscard);
     }
 
     protected override void PerObjectUpdate(int index)
     {
         base.PerObjectUpdate(index);
 
-        objectData.WorldMatrix = gameobjects[index].World;
-        objectData.NormaldMatrix = gameobjects[index].Normal;
-        objectData.Material = gameobjects[index].Material;
+        cBuffers[3].Insert(gameobjects[index].World, 0);
+        cBuffers[3].Insert(gameobjects[index].Normal, 1);
+        cBuffers[3].Insert(gameobjects[index].Material, 2);
 
-        MappedSubresource resource = context.Map(buffers[3], MapMode.WriteDiscard);
-        Marshal.StructureToPtr(objectData, resource.DataPointer, true);
-        context.Unmap(buffers[3]);
+        UpdateConstantBuffer(3, MapMode.WriteDiscard);
     }
 
-    private void PackLights()
+    protected void PackLights()
     {
-        for (int i = 0; i < lights.Count; i++)
+        for (int i = 0; i < lights.Count; ++i)
         {
             packedLights[i] = lights[i].RasterPack();
         }
@@ -284,14 +246,14 @@ public sealed class RasterizingEngine : Engine
         // clear all resource views to avoid conflicts
         ID3D11ShaderResourceView[] nulls = new ID3D11ShaderResourceView[lights.Count + 1];
         context.PSSetShaderResources(0, nulls);
-        for (int i = 0; i < lights.Count; i++)
+        for (int i = 0; i < lights.Count; ++i)
         {
             context.ClearDepthStencilView(lights[i].ShadowStencilView, DepthStencilClearFlags.Depth, 1.0f, 0);
             context.OMSetRenderTargets(new ID3D11RenderTargetView[i], lights[i].ShadowStencilView);
             context.RSSetViewport(lights[i].ShadowViewPort);
             PerLightUpdate(i);
 
-            for (int j = 0; j < gameobjects.Count; j++)
+            for (int j = 0; j < gameobjects.Count; ++j)
             {
                 PerObjectUpdate(j);
                 context.Draw(gameobjects[j].Triangles.Length * 3, gameobjects[j].Offset);
@@ -305,10 +267,10 @@ public sealed class RasterizingEngine : Engine
         context.PSSetShader(pixelShader);
         context.RSSetViewport(screenViewport);
         context.ClearDepthStencilView(depthView, DepthStencilClearFlags.Depth, 1.0f, 0);
-        context.ClearRenderTargetView(renderTargetView, new Color4(0.0f, 0.0f, 0.0f, float.PositiveInfinity));
+        context.ClearRenderTargetView(renderTargetView, backgroundColor);
         context.OMSetRenderTargets(renderTargetView, depthView);
         context.PSSetShaderResources(1, shadowMaps);
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             PerObjectUpdate(i);
             context.Draw(gameobjects[i].Triangles.Length * 3, gameobjects[i].Offset);
@@ -333,23 +295,18 @@ public sealed class RasterizingEngine : Engine
 
     protected override void Dispose(bool boolean)
     {
-        for (int i = 0; i < buffers.Length; i++)
-        {
-            buffers[i].Dispose();
-        }
-        lightingTargetView.Dispose();
-        lightingRasterizer.Dispose();
-        shadowPixelShader.Dispose();
-        shadowVertexShader.Dispose();
-        shadowRasterizer.Dispose();
-        for (int i = 0; i < samplers.Length; i++)
-        {
-            samplers[i].Dispose();
-        }
-        depthView.Dispose();
-        depthState.Dispose();
-        depthBuffer.Dispose();
-        lightViewTexture.Dispose();
+        lightingTargetView?.Dispose();
+        lightingRasterizer?.Dispose();
+        shadowPixelShader?.Dispose();
+        shadowVertexShader?.Dispose();
+        shadowRasterizer?.Dispose();
+        if (samplers != null)
+            foreach (var sampler in samplers)
+                sampler?.Dispose();
+        depthView?.Dispose();
+        depthState?.Dispose();
+        depthBuffer?.Dispose();
+        lightViewTexture?.Dispose();
 
         base.Dispose(boolean);
     }

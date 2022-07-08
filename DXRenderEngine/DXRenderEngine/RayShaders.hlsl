@@ -353,7 +353,7 @@ RayHit Closest(Ray ray)
 	hit.distance = 1.#INF;
 	hit.bary = 1.#INF;
 	hit.outside = true;
-	for (uint i = 0; i < NUM_SPHERES; i++)
+	for (uint i = 0; i < NUM_SPHERES; ++i)
 	{
 		float2 intersects = SphereIntersects(ray, Spheres[i]);
 		if (intersects.x < hit.distance && intersects.y > 0.0f)
@@ -371,7 +371,7 @@ RayHit Closest(Ray ray)
 			}
 		}
 	}
-	for (i = 0; i < NUM_LIGHTS; i++)
+	for (i = 0; i < NUM_LIGHTS; ++i)
 	{
 		float dist = LightIntersect(ray, Lights[i]);
 		if (dist < hit.distance)
@@ -380,14 +380,14 @@ RayHit Closest(Ray ray)
 			hit.distance = dist;
 		}
 	}
-	for (i = 0; i < NUM_OBJECTS; i++)
+	for (i = 0; i < NUM_OBJECTS; ++i)
 	{
 		float2 intersects = ObjectIntersects(ray, Gameobjects[i]);
 		if (intersects.x < hit.distance && intersects.y > 0.0f)
 		{
 			if (Materials[i].ior == 0.0f)
 			{
-				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; ++j)
 				{
 					float3 distances;
 					if (TriangleBothsects(ray, Triangles[j], distances) > 0 && distances.x < hit.distance)
@@ -402,7 +402,7 @@ RayHit Closest(Ray ray)
 			}
 			else
 			{
-				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; ++j)
 				{
 					float3 distances;
 					int temp = TriangleBothsects(ray, Triangles[j], distances);
@@ -429,7 +429,7 @@ RayHitBlocked Occluder(Ray ray, float lightDist)
 	int temp = -1;
 	float best = lightDist;
 	hit.object = -1;
-	for (uint i = 0; i < NUM_SPHERES; i++)
+	for (uint i = 0; i < NUM_SPHERES; ++i)
 	{
 		float2 intersects = SphereIntersects(ray, Spheres[i]);
 		if (intersects.x < lightDist && intersects.x > 0.0f)
@@ -443,14 +443,14 @@ RayHitBlocked Occluder(Ray ray, float lightDist)
 			}
 		}
 	}
-	for (i = 0; i < NUM_OBJECTS; i++)
+	for (i = 0; i < NUM_OBJECTS; ++i)
 	{
 		float2 intersects = ObjectIntersects(ray, Gameobjects[i]);
 		if (intersects.x < lightDist && intersects.y > 0.0f)
 		{
 			if (Materials[i].ior == 0.0f)
 			{
-				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; ++j)
 				{
 					float dist;
 					if (TriangleIntersect(ray, Triangles[j], dist) && dist < lightDist)
@@ -459,7 +459,7 @@ RayHitBlocked Occluder(Ray ray, float lightDist)
 			}
 			else
 			{
-				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; j++)
+				for (uint j = Gameobjects[i].startIndex; j < Gameobjects[i].endIndex; ++j)
 				{
 					float dist;
 					if (TriangleIntersect(ray, Triangles[j], dist) && dist < best)
@@ -504,7 +504,7 @@ float3 pixelShader(VertexShaderOutput In) : SV_TARGET
 	
 	// unrolled to avoid artifacts
 	[unroll]
-	for (uint i = 0; i < NUM_RAYS / 2; i++)
+	for (uint i = 0; i < NUM_RAYS / 2; ++i)
 	{
 		uint iRefl = (2 * i) + 1;
 		uint iRefr = iRefl + 1;
@@ -611,7 +611,7 @@ float3 pixelShader(VertexShaderOutput In) : SV_TARGET
 		}
 
 		// direct lighting / specular
-		for (uint j = 0; j < NUM_LIGHTS; j++)
+		for (uint j = 0; j < NUM_LIGHTS; ++j)
 		{
 			float3 toLight = Lights[j].position - rays[iRefl].origin;
 

@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace DXRenderEngine;
+﻿namespace DXRenderEngine;
 
 public static class EngineFactory
 {
@@ -12,24 +10,7 @@ public static class EngineFactory
         else if (desc is RayTracingEngineDescription)
             engine = new RayTracingEngine((RayTracingEngineDescription)desc);
         else
-            throw new();
+            engine = new Engine(desc);
         return engine;
-    }
-
-    public static Engine Create(EngineDescription desc, string shaderCode)
-    {
-        Engine engine = new(desc);
-        engine.SetShaderCode(shaderCode);
-        return engine;
-    }
-
-    public static RasterizingEngine Create(RasterizingEngineDescription desc)
-    {
-        return new(desc);
-    }
-
-    public static RayTracingEngine Create(RayTracingEngineDescription desc)
-    {
-        return new(desc);
     }
 }

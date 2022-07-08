@@ -1,6 +1,9 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Vortice.Mathematics;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
@@ -65,6 +68,8 @@ public struct Material
     public float Shininess;
     public float IOR;
     private Vector3 padding = new();
+
+    public static readonly Material Default = new(Colors.White, 1.0f, Colors.White, 0.0f, 0.0f);
 
     public Material(Vector3 diffuseColor, float roughness, Vector3 specularColor, float shine, float iOR)
     {
@@ -173,113 +178,139 @@ public struct RasterPackedLight
     }
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RasterApplicationBuffer
+public unsafe struct StructPointer<T> where T : unmanaged
 {
-    public Matrix4x4 ProjectionMatrix;
-    public Vector3 LowerAtmosphere;
-    public uint Width;
-    public Vector3 UpperAtmosphere;
-    public uint Height;
+    public T* pointer;
+    public int size;
 
-    public RasterApplicationBuffer(Matrix4x4 projectionMatrix, Vector3 lowerAtmosphere, Vector3 upperAtmosphere, int width, int height)
+    public StructPointer(T str)
     {
-        ProjectionMatrix = projectionMatrix;
-        LowerAtmosphere = lowerAtmosphere;
-        Width = (uint)width;
-        UpperAtmosphere = upperAtmosphere;
-        Height = (uint)height;
+        pointer = &str;
+        size = Marshal.SizeOf<T>();
     }
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RasterFrameBuffer
+public struct Data
 {
-    public Matrix4x4 ViewMatrix;
-    public Vector3 EyePos;
-    public float ModdedTime;
+    public int offset = 0;
+    public int size = 0;
 
-    public RasterFrameBuffer(Matrix4x4 view, Vector3 eyePos, float moddedTime)
+    public Data(int offset, int size)
     {
-        ViewMatrix = view;
-        EyePos = eyePos;
-        ModdedTime = moddedTime;
+        this.offset = offset;
+        this.size = size;
+    }
+
+    public Data(int offset)
+    {
+        this.offset = offset;
     }
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RasterLightBuffer
+public struct ConstantBuffer
 {
-    public Matrix4x4 LightMatrixRight;
-    public Matrix4x4 LightMatrixLeft;
-    public Matrix4x4 LightMatrixUp;
-    public Matrix4x4 LightMatrixDown;
-    public Matrix4x4 LightMatrixForward;
-    public Matrix4x4 LightMatrixBackward;
-    public uint Index;
-    public float DepthBias;
-    public float NormalBias;
-    public bool Line;
+    private byte[] buffer;
+    private Data[] objects;
 
-    public RasterLightBuffer(Matrix4x4 lightMatrixRight, Matrix4x4 lightMatrixLeft, Matrix4x4 lightMatrixUp, Matrix4x4 lightMatrixDown, 
-        Matrix4x4 lightMatrixForward, Matrix4x4 lightMatrixBack, int index, float depth, float normal, bool line)
+#if DEBUG
+
+    public ConstantBuffer(int[] sizes)
     {
-        LightMatrixRight = lightMatrixRight;
-        LightMatrixLeft = lightMatrixLeft;
-        LightMatrixUp = lightMatrixUp;
-        LightMatrixDown = lightMatrixDown;
-        LightMatrixForward = lightMatrixForward;
-        LightMatrixBackward = lightMatrixBack;
-        Index = (uint)index;
-        DepthBias = depth;
-        NormalBias = normal;
-        Line = line;
+        objects = new Data[sizes.Length];
+        int total = 0;
+        for (int i = 0; i < sizes.Length; ++i)
+        {
+            objects[i] = new(total, sizes[i]);
+            total += sizes[i];
+        }
+        int mod = total & PackMask;
+        if (mod > 0)
+        {
+            total += Pack - mod;
+        }
+        buffer = new byte[total];
     }
-}
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RasterObjectBuffer
-{
-    public Matrix4x4 WorldMatrix;
-    public Matrix4x4 NormaldMatrix;
-    public Material Material;
-
-    public RasterObjectBuffer(Matrix4x4 worldMatrix, Matrix4x4 normaldMatrix, Material material)
+    public unsafe int Insert<T>(T str, int index) where T : unmanaged
     {
-        WorldMatrix = worldMatrix;
-        NormaldMatrix = normaldMatrix;
-        Material = material;
+        Data info = objects[index];
+        int size = sizeof(T);
+        if (info.size != size)
+        {
+            throw new ArgumentException("index=" + index + " inSize=" + size + " expSize=" + info.size);
+        }
+        fixed (byte* pointer = &buffer[info.offset])
+        {
+            Unsafe.Write(pointer, str);
+        }
+
+        return index + 1;
     }
-}
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RayApplicationBuffer
-{
-    public Vector3 LowerAtmosphere;
-    public uint Width;
-    public Vector3 UpperAtmosphere;
-    public uint Height;
-
-    public RayApplicationBuffer(Vector3 lowerAtmosphere, Vector3 upperAtmosphere, int width, int height)
+    public unsafe int InsertArray<T>(T[] strs, int index) where T : unmanaged
     {
-        LowerAtmosphere = lowerAtmosphere;
-        UpperAtmosphere = upperAtmosphere;
-        Width = (uint)width;
-        Height = (uint)height;
+        int size = sizeof(T);
+        for (int i = 0; i < strs.Length; ++i)
+        {
+            index = Insert(strs[i], index);
+        }
+
+        return index;
     }
-}
 
-[StructLayout(LayoutKind.Sequential, Pack = 16)]
-public struct RayFrameBuffer
-{
-    public Matrix4x4 EyeRot;
-    public Vector3 EyePos;
-    public float ModdedTime;
+#else
 
-    public RayFrameBuffer(Matrix4x4 rot, Vector3 eyePos, float moddedTime)
+    public ConstantBuffer(int[] sizes)
     {
-        EyeRot = rot;
-        EyePos = eyePos;
-        ModdedTime = moddedTime;
+        objects = new Data[sizes.Length];
+        int total = 0;
+        for (int i = 0; i < sizes.Length; ++i)
+        {
+            objects[i] = new(total);
+            total += sizes[i];
+        }
+        total = (total + PackMask) & ~PackMask;
+        buffer = new byte[total];
+    }
+
+    public unsafe int Insert<T>(T str, int index) where T : unmanaged
+    {
+        fixed (byte* pointer = &buffer[objects[index].offset])
+        {
+            Unsafe.Write(pointer, str);
+        }
+
+        return index + 1;
+    }
+
+    public unsafe int InsertArray<T>(T[] strs, int index) where T : unmanaged
+    {
+        fixed (byte* pointer = &buffer[objects[index].offset])
+        {
+            byte* ptr = pointer;
+            for (int i = 0; i < strs.Length; ++i, ptr += sizeof(T))
+            {
+                Unsafe.Write(ptr, strs[i]);
+            }
+        }
+
+        return index + strs.Length;
+    }
+
+#endif
+
+    public void Copy(IntPtr dest)
+    {
+        Marshal.Copy(buffer, 0, dest, buffer.Length);
+    }
+
+    public byte[] GetBuffer()
+    {
+        return buffer;
+    }
+
+    public int GetSize()
+    {
+        return buffer.Length;
     }
 }

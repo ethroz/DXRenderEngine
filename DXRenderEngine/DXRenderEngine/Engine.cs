@@ -13,16 +13,17 @@ using System.Runtime.InteropServices;
 using Vortice.D3DCompiler;
 using System.Text;
 using System.Reflection;
+using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
 /// <summary>
-/// ToDo
+/// TODO
 ///     full screen
 /// </summary>
+
 public class Engine : IDisposable
 {
-    // Graphics Fields and Properties
     public readonly EngineDescription Description;
     protected Form window;
     private IDXGIFactory5 factory;
@@ -31,35 +32,50 @@ public class Engine : IDisposable
     protected ID3D11Device5 device;
     protected ID3D11DeviceContext3 context;
     protected IDXGISwapChain4 swapChain;
-    protected ID3D11RenderTargetView1 renderTargetView;
+
+    protected InputElementDescription[] inputElements;
+    protected ID3D11InputLayout inputLayout;
     protected VertexPositionNormal[] vertices;
     protected ID3D11Buffer vertexBuffer;
+
+    protected ConstantBuffer[] cBuffers;
+    protected ID3D11Buffer[] buffers;
+    private Dictionary<string, int> hlslDefMap = new();
+    private Dictionary<string, int> hlslTypeMap = new()
+    {
+        {"matrix", 64},
+        {"float3x3", 48},
+        {"float4", 16},
+        {"float3", 12},
+        {"float2", 8},
+        {"float", 4},
+        {"uint", 4},
+        {"int", 4},
+        {"bool", 4}
+    };
+
+    protected ID3D11Texture2D1 renderTargetBuffer;
+    protected ID3D11RenderTargetView1 renderTargetView;
     protected ID3D11VertexShader vertexShader;
     protected ID3D11PixelShader pixelShader;
     protected Viewport screenViewport;
-    protected InputElementDescription[] inputElements;
-    protected ID3D11InputLayout inputLayout;
-    protected float displayRefreshRate { get; private set; }
+
     protected string shaderCode;
     protected readonly string vertexShaderEntry;
     protected readonly string pixelShaderEntry;
 
-    // Controllable Graphics Settings
-    public int Width 
-    { 
-        get => window.ClientSize.Width;
-        private set => window.BeginInvoke(() => window.ClientSize = new(value, window.ClientSize.Height));
-    }
-    public int Height
-    {
-        get => window.ClientSize.Height;
-        private set => window.BeginInvoke(() => window.ClientSize = new(window.ClientSize.Width, value));
-    }
+    protected float displayRefreshRate { get; private set; }
+    public int Width => Description.Width;
+    public int Height => Description.Height;
 
     // Time Fields
+
+    // Represents the time since the last frame
     public double frameTime { get; private set; }
+    // Represents the time since the last input update
+    public double ElapsedTime => input.ElapsedTime;
     private long t1, t2;
-    protected readonly Stopwatch sw;
+    protected static readonly Stopwatch sw = new();
     private const long MILLISECONDS_FOR_RESET = 1000;
     private long startFPSTime;
     private long lastReset = 0;
@@ -69,12 +85,13 @@ public class Engine : IDisposable
     // Engine Fields
     public IntPtr Handle => window.Handle;
     public bool Running { get; private set; }
-    private Action Setup, Start, Update, UserInput;
-    public const double DEG2RAD = Math.PI / 180.0;
+    public readonly bool HasShader;
+    private bool printing = true;
+    private Action Setup, Start, UserInput;
+    protected Action Update { get; private set; }
     public bool Focused { get; private set; }
     public readonly Input input;
     private Thread renderThread, controlsThread, debugThread;
-    private bool printMessages = true;
     private static Queue<string> messages = new Queue<string>();
     protected readonly Vector3 LowerAtmosphere = new(0.0f, 0.0f, 0.0f);
     protected readonly Vector3 UpperAtmosphere = new Vector3(1.0f, 1.0f, 1.0f) * 0.0f;
@@ -84,28 +101,49 @@ public class Engine : IDisposable
     public Vector3 EyeRot;
     public Vector3 EyeStartPos;
     public Vector3 EyeStartRot;
-    public float DepthBias = 0.0f;
-    public float NormalBias = 0.0f;
-    public bool Line = true;
 
     public Engine(EngineDescription desc)
     {
+        sw.Restart();
+
+#if DEBUG
+        debugThread = new(() => DebugLoop());
+        debugThread.Start();
+#endif
+
         print("Construction");
         Description = desc;
         Setup = desc.Setup;
         Start = desc.Start;
         Update = desc.Update;
         UserInput = desc.UserInput;
-        vertexShaderEntry = "vertexShader";
-        pixelShaderEntry = "pixelShader";
-        inputElements = new InputElementDescription[]
-        {
-            new("POSITION", 0, Format.R32G32B32_Float, 0, 0, InputClassification.PerVertexData, 0),
-            new("NORMAL", 0, Format.R32G32B32_Float, 12, 0, InputClassification.PerVertexData, 0),
-        };
 
-        sw = new();
-        sw.Start();
+        HasShader = desc.ShaderResource.Length != 0;
+
+        if (HasShader)
+        {
+            vertexShaderEntry = "vertexShader";
+            pixelShaderEntry = "pixelShader";
+
+            int endNamesp = desc.ShaderResource.IndexOf('.');
+            string namesp = desc.ShaderResource.Substring(0, endNamesp);
+            Assembly assembly = Assembly.Load(namesp);
+            using (Stream stream = assembly.GetManifestResourceStream(desc.ShaderResource))
+            using (StreamReader reader = new(stream))
+            {
+                shaderCode = reader.ReadToEnd();
+            }
+
+            inputElements = new InputElementDescription[]
+            {
+                new("POSITION", 0, Format.R32G32B32_Float, 0, 0, InputClassification.PerVertexData, 0),
+                new("NORMAL", 0, Format.R32G32B32_Float, 12, 0, InputClassification.PerVertexData, 0),
+            };
+        }
+        else
+        {
+            print("No shader");
+        }
 
         Application.EnableVisualStyles();
 
@@ -116,11 +154,13 @@ public class Engine : IDisposable
             FormBorderStyle = FormBorderStyle.Fixed3D,
             BackColor = System.Drawing.Color.Black,
             WindowState = desc.WindowState,
-            StartPosition = FormStartPosition.Manual,
-            Location = new System.Drawing.Point(630, 250)
+            StartPosition = FormStartPosition.CenterScreen
         };
 
-        input = new(window.Handle, this, UserInput);
+        if (desc.UserInput != null)
+        {
+            input = new(window.Handle, this, UserInput);
+        }
 
         window.Load += Window_Load;
         window.Shown += Window_Shown;
@@ -131,16 +171,11 @@ public class Engine : IDisposable
         window.FormClosing += Closing;
     }
 
-    internal void SetShaderCode(string code)
-    {
-        shaderCode = code;
-    }
-
     public void Run()
     {
         print("Running");
         Application.Run(window);
-        printMessages = false;
+        printing = false;
         debugThread?.Join();
     }
 
@@ -158,7 +193,7 @@ public class Engine : IDisposable
         DXGI.CreateDXGIFactory2(debug, out factory);
         adapter = new(factory.GetAdapter(0).NativePointer);
 
-        SwapChainDescription1 scd = new(Width, Height/*, Format.R8G8B8A8_UNorm*/);
+        SwapChainDescription1 scd = new(Width, Height, Format.R8G8B8A8_UNorm);
         swapChain = new(factory.CreateSwapChainForHwnd(device, window.Handle, scd).NativePointer);
 
         AssignRenderTarget();
@@ -167,13 +202,18 @@ public class Engine : IDisposable
 
         InitializeShaders();
 
+        long time1 = sw.ElapsedMilliseconds;
+        ParseConstantBuffers();
+        print("Buffer parsing time=" + (sw.ElapsedMilliseconds - time1) + "ms");
+
         SetConstantBuffers();
     }
 
     private void AssignRenderTarget()
     {
-        using (ID3D11Texture2D1 backBuffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
-            renderTargetView = device.CreateRenderTargetView1(backBuffer);
+        renderTargetBuffer?.Dispose();
+        renderTargetBuffer = swapChain.GetBuffer<ID3D11Texture2D1>(0);
+        renderTargetView = device.CreateRenderTargetView1(renderTargetBuffer);
         screenViewport = new(0, 0, Width, Height);
         context.RSSetViewport(screenViewport);
     }
@@ -192,7 +232,7 @@ public class Engine : IDisposable
     {
         // need to calculate vertex count first.
         int vertexCount = 0;
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
             gameobjects[i].Offset = vertexCount;
             vertexCount += gameobjects[i].Triangles.Length * 3;
@@ -200,9 +240,9 @@ public class Engine : IDisposable
         vertices = new VertexPositionNormal[vertexCount];
 
         // then pack all the vertices
-        for (int i = 0; i < gameobjects.Count; i++)
+        for (int i = 0; i < gameobjects.Count; ++i)
         {
-            for (int j = 0; j < gameobjects[i].Triangles.Length; j++)
+            for (int j = 0; j < gameobjects[i].Triangles.Length; ++j)
             {
                 vertices[gameobjects[i].Offset + j * 3] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(0);
                 vertices[gameobjects[i].Offset + j * 3 + 1] = gameobjects[i].Triangles[j].GetVertexPositionNormalColor(1);
@@ -228,6 +268,171 @@ public class Engine : IDisposable
         }
 
         shaderCode = shaderCode.Replace(target, newValue);
+    }
+
+    protected void ParseConstantBuffers()
+    {
+        // get all the buffers
+        List<int> indices = new();
+        int index = 0;
+        while (true)
+        {
+            int before = index;
+            index = shaderCode.IndexOf("cbuffer", index + 1);
+            if (index == -1)
+                break;
+            indices.Add(index);
+        }
+
+        cBuffers = new ConstantBuffer[indices.Count];
+
+        if (indices.Count > 0)
+        {
+            // get any hlsl defs in case arrays use them in buffers
+            GetDefs();
+
+            // get all the items in each buffer
+            for (int i = 0; i < indices.Count; ++i)
+            {
+                cBuffers[i] = new ConstantBuffer(ParseBlock(indices[i]));
+            }
+        }
+    }
+
+    private void GetDefs()
+    {
+        int defIndex = shaderCode.IndexOf("#define");
+        while (defIndex != -1)
+        {
+            int startName = FindNot(shaderCode, ' ', Find(shaderCode, ' ', defIndex));
+            int endName = Find(shaderCode, ' ', startName);
+            int startVal = FindNot(shaderCode, ' ', endName);
+
+            // raw number
+            if (char.IsDigit(shaderCode[startVal]))
+            {
+                string name = shaderCode.Substring(startName, endName - startName);
+                int endVal = Find(shaderCode, " \r\n", startVal);
+                string val = shaderCode.Substring(startVal, endVal - startVal);
+                char typeEnding = shaderCode[endVal - 1];
+
+                // int
+                if (typeEnding == 'u')
+                {
+                    hlslDefMap.Add(name, (int)uint.Parse(val.Substring(0, val.Length - 1)));
+                }
+                // uint
+                else if (char.IsDigit(typeEnding))
+                {
+                    hlslDefMap.Add(name, int.Parse(val));
+                }
+            }
+            // ignore all other types
+
+            // find the next macro
+            defIndex = shaderCode.IndexOf("#define", defIndex + 1);
+        }
+    }
+
+    private int[] ParseBlock(int blockLocation)
+    {
+        int startBlock = shaderCode.IndexOf('{', blockLocation);
+        int endBlock = shaderCode.IndexOf('}', startBlock);
+        string block = shaderCode.Substring(startBlock, endBlock - startBlock);
+
+        List<int> sizes = new();
+        int nextIndex = FindNot(block, " \t\r\n", 1);
+        while (true)
+        {
+            int startType = nextIndex;
+            if (startType == -1)
+            {
+                break;
+            }
+            else if (block[startType] == '/')
+            {
+                // skip comments
+                nextIndex = FindNot(block, " \t\r\n", Find(block, "\r\n", nextIndex));
+                continue;
+            }
+            int endType = Find(block, ' ', startType);
+            int startName = FindNot(block, ' ', endType);
+            nextIndex = FindNot(block, " \t\r\n", Find(block, ';', startName) + 1);
+            string type = block.Substring(startType, endType - startType);
+
+            int openBracket = Find(block, '[', startName);
+            int arraySize = 1;
+
+            // if there is an array
+            if (openBracket != -1 && (openBracket < nextIndex || nextIndex == -1))
+            {
+                int closeBracket = Find(block, ']', openBracket);
+                string arraySizeString = block.Substring(openBracket + 1, closeBracket - openBracket - 1);
+
+                // literal
+                if (char.IsDigit(arraySizeString[0]))
+                {
+                    // uint for array size
+                    if (arraySizeString.EndsWith('u'))
+                    {
+                        arraySizeString = arraySizeString.Substring(0, arraySizeString.Length - 1);
+                    }
+
+                    arraySize = int.Parse(arraySizeString);
+                }
+                // def
+                else if(!hlslDefMap.TryGetValue(arraySizeString, out arraySize))
+                {
+                    throw new Exception(string.Format("\"{}\" is not defined in HLSL shader", arraySizeString));
+                }
+            }
+
+            // Get the size of the element
+            if (!hlslTypeMap.TryGetValue(type, out int size))
+            {
+                int newStruct = shaderCode.IndexOf("struct " + type);
+                if (newStruct == -1)
+                {
+                    throw new KeyNotFoundException(string.Format("\"{}\" is not a valid type", type));
+                }
+
+                // recursively link through structs until a primitive type is found
+                int[] structSizes = ParseBlock(newStruct);
+
+                // Calculate the packed-size of the struct.
+                size = 0;
+                int modSize = 0;
+                foreach (var structSize in structSizes)
+                {
+                    int newSize = modSize + structSize;
+                    int newModSize = newSize & PackMask;
+                    if (newSize > Pack && newModSize > 0)
+                    {
+                        size += Pack - modSize;
+                        newModSize = structSize & PackMask;
+                    }
+                    modSize = newModSize;
+                    size += structSize;
+                }
+                size = (size + PackMask) & ~PackMask;
+
+                // add the new struct to the type map
+                hlslTypeMap.Add(type, size);
+            }
+
+            // add the object to the list of objects
+            if (arraySize > 1)
+            {
+                for (int i = 0; i < arraySize; ++i)
+                    sizes.Add(size);
+            }
+            else
+            {
+                sizes.Add(size);
+            }
+        }
+
+        return sizes.ToArray();
     }
 
     protected virtual void InitializeShaders()
@@ -290,9 +495,25 @@ public class Engine : IDisposable
     {
         EyeStartPos = EyePos;
         EyeStartRot = EyeRot;
+
+        buffers = new ID3D11Buffer[cBuffers.Length];
+
+        BufferDescription bd = new(0, BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
+        for (int i = 0; i < cBuffers.Length; ++i)
+        {
+            bd.SizeInBytes = cBuffers[i].GetSize();
+            buffers[i] = device.CreateBuffer(bd);
+        }
     }
 
-    private void GetTime()
+    protected void UpdateConstantBuffer(int index, MapMode mode = MapMode.WriteNoOverwrite)
+    {
+        MappedSubresource resource = context.Map(buffers[index], mode);
+        cBuffers[index].Copy(resource.DataPointer);
+        context.Unmap(buffers[index]);
+    }
+
+    protected void GetTime()
     {
         t2 = sw.ElapsedTicks;
         frameTime = (t2 - t1) / 10000000.0;
@@ -335,13 +556,11 @@ public class Engine : IDisposable
     {
         if (swapChain.IsFullscreen)
         {
-            Width = Description.Width;
-            Height = Description.Width;
+            window.ClientSize = new System.Drawing.Size(Description.Width, Description.Height);
         }
         else
         {
-            Width = Screen.PrimaryScreen.Bounds.Width;
-            Height = Screen.PrimaryScreen.Bounds.Height;
+            window.ClientSize = Screen.PrimaryScreen.Bounds.Size;
         }
     }
 
@@ -359,22 +578,26 @@ public class Engine : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    // subclasses should always dispose this last
+    // subclasses should always dispose this last and never assume that anything will be set
     protected virtual void Dispose(bool boolean)
     {
         Stop();
-        input.Dispose();
-        inputLayout.Dispose();
-        pixelShader.Dispose();
-        vertexShader.Dispose();
-        vertexBuffer.Dispose();
-        renderTargetView.Dispose();
-        swapChain.Dispose();
-        context.Dispose();
+        if (buffers != null)
+            foreach (var buffer in buffers)
+                buffer?.Dispose();
+        input?.Dispose();
+        inputLayout?.Dispose();
+        pixelShader?.Dispose();
+        vertexShader?.Dispose();
+        vertexBuffer?.Dispose();
+        renderTargetBuffer?.Dispose();
+        renderTargetView?.Dispose();
+        swapChain?.Dispose();
+        context?.Dispose();
         output?.Dispose();
-        adapter.Dispose();
-        device.Dispose();
-        window.Dispose();
+        adapter?.Dispose();
+        device?.Dispose();
+        window?.Dispose();
     }
 
     private void GetRefCounts()
@@ -413,7 +636,7 @@ public class Engine : IDisposable
                     {
                         continue;
                     }
-                    for (int i = 0; i < arr.Length; i++)
+                    for (int i = 0; i < arr.Length; ++i)
                     {
                         SharpGen.Runtime.ComObject comObject = (SharpGen.Runtime.ComObject)arr.GetValue(i);
                         if (comObject.NativePointer == IntPtr.Zero)
@@ -433,32 +656,29 @@ public class Engine : IDisposable
 
     /////////////////////////////////////
 
-    private void RenderLoop()
+    protected virtual void RenderFlow()
     {
-        while (Running)
-        {
-            long c1 = sw.ElapsedTicks;
-            GetTime();
-            if (!Focused)
-                continue;
-            long c2 = sw.ElapsedTicks;
-            Render();
-            long c3 = sw.ElapsedTicks;
-            Update();
-            long c4 = sw.ElapsedTicks;
-            PerFrameUpdate();
-            long c5 = sw.ElapsedTicks;
-            swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
-            long c6 = sw.ElapsedTicks;
-            //print("GetTime:" + (c2 - c1) + " Render:" + (c3 - c2) + " Update:" + (c4 - c3) + " Frame:" + (c5 - c4) + " Present:" + (c6 - c5));
-        }
+        //long c1 = sw.ElapsedTicks;
+        GetTime();
+        if (!Focused)
+            return;
+        //long c2 = sw.ElapsedTicks;
+        Render();
+        //long c3 = sw.ElapsedTicks;
+        Update();
+        //long c4 = sw.ElapsedTicks;
+        PerFrameUpdate();
+        //long c5 = sw.ElapsedTicks;
+        swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
+        //long c6 = sw.ElapsedTicks;
+        //print("GetTime:" + (c2 - c1) + " Render:" + (c3 - c2) + " Update:" + (c4 - c3) + " Frame:" + (c5 - c4) + " Present:" + (c6 - c5));
     }
 
     private void DebugLoop()
     {
         long t1 = sw.ElapsedTicks;
         long t2 = t1;
-        while (printMessages)
+        while (printing)
         {
             // frame limiter
             while (10000000.0 / (t2 - t1) > 144.0)
@@ -482,23 +702,18 @@ public class Engine : IDisposable
     protected virtual void PerApplicationUpdate()
     {
         foreach (Light l in lights)
-        {
             l.GenerateMatrix();
-        }
     }
 
     protected virtual void PerFrameUpdate()
     {
         // objects can only move in between frames
-        for (int i = 0; i < gameobjects.Count; i++)
-        {
-            gameobjects[i].CreateMatrices();
-        }
+        foreach (var go in gameobjects)
+            go.CreateMatrices();
     }
 
     protected virtual void PerLightUpdate(int index)
     {
-
     }
 
     protected virtual void PerObjectUpdate(int index)
@@ -518,15 +733,14 @@ public class Engine : IDisposable
     private void Window_Load(object sender, EventArgs e)
     {
         print("Loading");
-        if (shaderCode == null)
-        {
-            throw new("shader code is null");
-        }
         Running = true;
         Setup();
-        InitializeDeviceResources();
-        GetDisplayRefreshRate();
-        InitializeVertices();
+        if (HasShader)
+        {
+            InitializeDeviceResources();
+            GetDisplayRefreshRate();
+            InitializeVertices();
+        }
         Start();
         PerApplicationUpdate();
     }
@@ -534,28 +748,37 @@ public class Engine : IDisposable
     private void Window_Shown(object sender, EventArgs e)
     {
         print("Shown");
-        input.InitializeInputs();
 
-        controlsThread = new(() => input.ControlLoop());
-        renderThread = new(() => RenderLoop());
-#if DEBUG
-        debugThread = new(() => DebugLoop());
-#endif
+        if (input != null)
+        {
+            input.InitializeInputs();
+            controlsThread = new(() => input.ControlLoop());
+        }
+
+        if (HasShader)
+        {
+            renderThread = new(() =>
+            {
+                t1 = startFPSTime = sw.ElapsedTicks;
+                while (Running)
+                {
+                    RenderFlow();
+                }
+            });
+        }
 
         GC.Collect();
 
-        t1 = startFPSTime = sw.ElapsedTicks;
-        renderThread.Start();
-        controlsThread.Start();
-        debugThread?.Start();
+        renderThread?.Start();
+        controlsThread?.Start();
     }
 
     private void Closing(object sender, FormClosingEventArgs e)
     {
         print("Closing");
         Running = false;
-        renderThread.Join();
-        controlsThread.Join();
+        renderThread?.Join();
+        controlsThread?.Join();
 
         Dispose();
     }
@@ -572,6 +795,8 @@ public class Engine : IDisposable
 
     private void Window_Resize(object sender, EventArgs e)
     {
+        if (!Description.Resizeable || !HasShader) return;
+
         print("resize");
         if (window.ClientSize == Screen.PrimaryScreen.Bounds.Size)
             if (!swapChain.IsFullscreen)
@@ -606,7 +831,7 @@ public class Engine : IDisposable
             output.Release();
         }
 
-        for (int i = 0; i < outputs.Count; i++)
+        for (int i = 0; i < outputs.Count; ++i)
         {
             if (i == main)
             {
@@ -619,131 +844,9 @@ public class Engine : IDisposable
         }
     }
 
-    ///////////////////////////////////////
-
-    public static int Pow(int b, int e)
+    [Conditional("DEBUG")]
+    public static void print(object message = null)
     {
-        int output = b;
-        while (e-- > 1)
-        {
-            output *= b;
-        }
-        return output;
-    }
-
-    protected static void WriteStructArray<T>(T[] data, ref IntPtr pointer)
-    {
-        for (int i = 0; i < data.Length; i++)
-        {
-            Marshal.StructureToPtr(data[i], pointer, true);
-            pointer += Marshal.SizeOf<T>();
-        }
-    }
-
-    private static Matrix4x4 CreateRotationX(float angle)
-    {
-        float cos = (float)Math.Cos(angle * DEG2RAD);
-        float sin = (float)Math.Sin(angle * DEG2RAD);
-
-        Matrix4x4 result = Matrix4x4.Identity;
-        result.M22 = cos;
-        result.M23 = sin;
-        result.M32 = -sin;
-        result.M33 = cos;
-
-        return result;
-    }
-
-    private static Matrix4x4 CreateRotationY(float angle)
-    {
-        float cos = (float)Math.Cos(angle * DEG2RAD);
-        float sin = (float)Math.Sin(angle * DEG2RAD);
-
-        Matrix4x4 result = Matrix4x4.Identity;
-        result.M11 = cos;
-        result.M13 = -sin;
-        result.M31 = sin;
-        result.M33 = cos;
-
-        return result;
-    }
-
-    private static Matrix4x4 CreateRotationZ(float angle)
-    {
-        float cos = (float)Math.Cos(-angle * DEG2RAD);
-        float sin = (float)Math.Sin(-angle * DEG2RAD);
-
-        Matrix4x4 result = Matrix4x4.Identity;
-        result.M11 = cos;
-        result.M12 = sin;
-        result.M21 = -sin;
-        result.M22 = cos;
-
-        return result;
-    }
-
-    public static Matrix4x4 CreateRotation(Vector3 rot)
-    {
-        Matrix4x4 rotx = CreateRotationX(rot.X);
-        Matrix4x4 roty = CreateRotationY(rot.Y);
-        Matrix4x4 rotz = CreateRotationZ(rot.Z);
-        return rotz * rotx * roty;
-    }
-
-    public static Matrix4x4 CreateWorld(Vector3 pos, Vector3 rot, Vector3 sca)
-    {
-        Matrix4x4 position = Matrix4x4.CreateTranslation(pos);
-        Matrix4x4 rotation = CreateRotation(rot);
-        Matrix4x4 scale = Matrix4x4.CreateScale(sca);
-
-        return scale * rotation * position;
-    }
-
-    public static Matrix4x4 CreateView(Vector3 pos, Vector3 rot)
-    {
-        Matrix4x4 rotation = CreateRotation(rot);
-        Vector3 xaxis = Vector3.TransformNormal(Vector3.UnitX, rotation);
-        Vector3 yaxis = Vector3.TransformNormal(Vector3.UnitY, rotation);
-        Vector3 zaxis = Vector3.TransformNormal(Vector3.UnitZ, rotation);
-
-        Matrix4x4 result = Matrix4x4.Identity;
-        result.M11 = xaxis.X;
-        result.M21 = xaxis.Y;
-        result.M31 = xaxis.Z;
-        result.M12 = yaxis.X;
-        result.M22 = yaxis.Y;
-        result.M32 = yaxis.Z;
-        result.M13 = zaxis.X;
-        result.M23 = zaxis.Y;
-        result.M33 = zaxis.Z;
-        result.M41 = -Vector3.Dot(xaxis, pos);
-        result.M42 = -Vector3.Dot(yaxis, pos);
-        result.M43 = -Vector3.Dot(zaxis, pos);
-
-        return result;
-    }
-
-    public static Matrix4x4 CreateProjection(float fovVDegrees, float aspectRatioHW, float nearPlane, float farPlane)
-    {
-        float fFovRad = 1.0f / (float)Math.Tan(fovVDegrees * 0.5f * DEG2RAD);
-        Matrix4x4 mat = new();
-        mat.M11 = fFovRad;
-        mat.M22 = aspectRatioHW * fFovRad;
-        mat.M33 = farPlane / (farPlane - nearPlane);
-        mat.M43 = (-farPlane * nearPlane) / (farPlane - nearPlane);
-        mat.M34 = 1.0f;
-        return mat;
-    }
-
-    public static void print(object message)
-    {
-#if DEBUG
-        messages.Enqueue(DateTime.Now.Ticks + ": " + message.ToString());
-#endif
-    }
-
-    public static void print()
-    {
-        print("");
+        messages.Enqueue(sw.ElapsedTicks + ": " + message?.ToString());
     }
 }
