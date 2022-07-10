@@ -10,7 +10,9 @@ namespace DXRenderEngine;
 
 /// <summary>
 /// TODO
+///     shadow acne
 ///     pcf/pcs
+///     tesselation
 /// </summary>
 public class RasterizingEngine : Engine
 {

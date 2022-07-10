@@ -27,17 +27,42 @@ public class EngineRunningTests
         while (!resultsPath.EndsWith(assembly))
             resultsPath = Directory.GetParent(resultsPath).FullName;
         resultsPath += Path.DirectorySeparatorChar + "Results" + Path.DirectorySeparatorChar;
+
+        // Get the correct file suffix to avoid overwriting
+        if (!Overwrite)
+        {
+            fileSuffix = 0;
+            var files = Directory.GetFiles(resultsPath);
+            foreach (var file in files)
+            {
+                int index = -1;
+                for (int i = 0; i < file.Length; ++i)
+                {
+                    if (char.IsDigit(file[i]))
+                    {
+                        index = i;
+                    }
+                    else if (index != -1)
+                    {
+                        fileSuffix = Math.Max(fileSuffix, int.Parse(file.Substring(index, i - index)));
+                        break;
+                    }
+                }
+            }
+            ++fileSuffix;
+        }
     }
 
-    const bool Hidden = false;
+    const bool Hidden = true;
     const bool DoManual = false;
-    const bool Print = true;
-    const string fileSuffix = "1";
+    const bool Save = false;
+    const bool Overwrite = false;
 
     static AnalysisEngine engine;
     static Stopwatch sw;
     static List<double> biases;
     static readonly string resultsPath;
+    static readonly int fileSuffix = 1;
     static bool allWhite;
     static int magIndex;
     static int last;
@@ -49,7 +74,8 @@ public class EngineRunningTests
     const int minSigFigs = 0;
     const int maxSigFigs = 4;
     static readonly double[] magnitudes;
-    static Vars v;
+    static Vars v1;
+    static Vars v2;
     static float min;
     static float max;
     static float inc;
@@ -57,13 +83,13 @@ public class EngineRunningTests
     const float MoveSpeed = 4.0f;
     const float Sensitivity = 0.084f;
 
-    private static void ChangeValues()
+    private static void UpdateConstants()
     {
-        float phi = -v.phi;
-        engine.lights[0].Position = new(0.0f, (float)(v.dist * Math.Cos(phi * DEG2RAD)), (float)(v.dist * Math.Sin(phi * DEG2RAD)));
-        engine.lights[0].FarPlane = v.far;
-        engine.lights[0].ShadowRes = v.res;
-        float total = phi - v.theta;
+        float phi = -v2.phi;
+        engine.lights[0].Position = new(0.0f, (float)(v2.dist * Math.Cos(phi * DEG2RAD)), (float)(v2.dist * Math.Sin(phi * DEG2RAD)));
+        engine.lights[0].FarPlane = v2.far;
+        engine.lights[0].ShadowRes = v2.res;
+        float total = phi - v2.theta;
         engine.gameobjects[0].Rotation.X = total;
         if (!Manual)
         {
@@ -89,12 +115,12 @@ public class EngineRunningTests
         if (Manual)
         {
             Manual = false;
-            ChangeValues();
+            UpdateConstants();
             Manual = true;
         }
         else
         {
-            ChangeValues();
+            UpdateConstants();
         }
     }
 
@@ -102,19 +128,19 @@ public class EngineRunningTests
     {
         if (engine.DepthBias == 0.0)
             engine.DepthBias = 0.0;
-        if (Print && !Hidden)
-            Trace.WriteLine("v=" + v.ToString() + " bias=" + engine.DepthBias);
+        if (!Hidden)
+            Trace.WriteLine("v=" + v2.ToString() + " bias=" + engine.DepthBias);
         biases.Add(engine.DepthBias);
 
-        v += inc;
+        v2 += inc;
 
         // exit condition
-        if (v > max)
+        if (v2 > max)
             engine.Stop();
 
         // reset
         magIndex = 0;
-        ChangeValues();
+        UpdateConstants();
     }
 
     private static void SmartNext()
@@ -126,9 +152,7 @@ public class EngineRunningTests
         else
             magIndex = Math.Min((int)Math.Log10(1.0 / diff) + 1, maxSigFigs);
         lo = engine.DepthBias;
-        Assert.IsTrue(magIndex <= maxSigFigs && magIndex >= minSigFigs);
         ChangeBias(Math.Sign(inc) * magnitudes[magIndex]);
-
     }
 
     private static void ChangeBias(double amount)
@@ -361,7 +385,7 @@ public class EngineRunningTests
         }
     }
 
-    private static void EndlessLoop()
+    private static void TimedStop()
     {
         // Just wait to exit
         if (sw.ElapsedMilliseconds > 2000)
@@ -447,20 +471,24 @@ public class EngineRunningTests
         if (engine.input.KeyHeld(Key.LeftShift))
             m *= 10;
 
-        v += m;
+        v2 += m;
 
         // print if buttons pressed
         if (m != 0 || mult != 0.0 || engine.input.KeyDown(Key.Backslash))
         {
-            Engine.print("depth=" + engine.DepthBias + " phi=" + v.phi + " theta=" + v.theta + " light=" + engine.lights[0].Position + " plane=" + engine.gameobjects[0].Rotation.X);
-            ChangeValues();
+            Trace.WriteLine(string.Format("bias={0:F" + maxSigFigs + "} theta={1} phi={2} light={3} plane={4}", 
+                engine.DepthBias, v2.theta, v2.phi, engine.lights[0].Position, engine.gameobjects[0].Rotation.X));
+            UpdateConstants();
         }
     }
 
     private static void SaveResults()
     {
+        if (!Save)
+            return;
+
         // get path
-        string path = resultsPath + v.var.ToString() + fileSuffix + ".txt";
+        string path = resultsPath + v2.var.ToString() + fileSuffix + ".txt";
 
         // find max variable sig figs
         int varFigs = 0;
@@ -470,18 +498,11 @@ public class EngineRunningTests
         }
         varFigs = Math.Min(varFigs, 4);
 
-        // find max variable digits to left of decimal
-        int varDigits = 0;
-        for (float i = min; i < max; i += inc)
-        {
-            varDigits = Math.Max((int)Math.Ceiling(Math.Log10(Math.Abs(i))), varDigits);
-        }
-        varDigits += varFigs + 1 + Math.Sign(varFigs);
-
         // format and save
         string[] lines = new string[biases.Count];
-        for (int i = 0; i < lines.Length; ++i, min += inc)
-            lines[i] = string.Format("{0}={1," + varDigits + ":F" + varFigs + "}  bias={2,7:F" + maxSigFigs + "}", v.var.ToString(), min, biases[i]);
+        float val = min;
+        for (int i = 0; i < lines.Length; ++i, val += inc)
+            lines[i] = string.Format("{0:F" + varFigs + "}\t{1:F" + maxSigFigs + "}", val, biases[i]);
         File.WriteAllLines(path, lines);
         Trace.WriteLine("Saved to: " + path);
     }
@@ -519,7 +540,7 @@ public class EngineRunningTests
         EngineRunningTests.min = min;
         EngineRunningTests.max = max;
         EngineRunningTests.inc = inc;
-        v = new(var, min, f1, f2, f3, f4);
+        v2 = new(var, min, f1, f2, f3, f4);
 
         engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, update: SmartSearch, 
             windowState: Hidden ? FormWindowState.Minimized : FormWindowState.Normal, resizeable: !Hidden), shadows: true), 
@@ -560,14 +581,13 @@ public class EngineRunningTests
     [TestMethod]
     public void RunManual()
     {
-        if (Hidden || !DoManual)
+        if (!DoManual)
             return;
-        Manual = true;
 
-        v = new(Var.Distance, 2.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
+        v2 = new(Var.Distance, 100.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
 
         engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, userInput: UserInput), shadows: true), 
-            Analyzer, Hidden, Manual));
+            Analyzer, false, Manual));
 
         Manual = false; // With this set to false, changing variable value will reset the eye position and view direction
         engine.Run();
@@ -580,9 +600,9 @@ public class EngineRunningTests
         if (Hidden || !DoManual)
             return;
 
-        v = new(Var.Phi, 0.0f, 0.0f, 10.0f, 100.0f, 4096.0f);
+        v2 = new(Var.Phi, 0.0f, 0.0f, 10.0f, 100.0f, 4096.0f);
 
-        engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, update: EndlessLoop), shadows: true),
+        engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, update: TimedStop), shadows: true),
             Analyzer, Hidden, Manual));
 
         engine.DepthBias = 1.0f;
@@ -600,7 +620,7 @@ public class EngineRunningTests
     [TestMethod]
     public void Shadow_Test_Distance()
     {
-        CreateAndRun(Var.Distance, 1.0f, 50.0f, 1.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
+        CreateAndRun(Var.Distance, 1.0f, 99.0f, 1.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
     }
 
     [TestMethod]

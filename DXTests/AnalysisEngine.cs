@@ -5,6 +5,7 @@ namespace DXTests;
 public class AnalysisEngine : RasterizingEngine
 {
     public new readonly AnalysisEngineDescription Description;
+    protected ID3D11Texture2D1 analysisBuffer;
     public readonly Action<IntPtr, int> Analyze;
     public double DepthBias = 0.0;
 
@@ -13,6 +14,20 @@ public class AnalysisEngine : RasterizingEngine
         window.ShowInTaskbar = !ED.Hidden;
         Description = ED;
         Analyze = ED.Analyze;
+    }
+
+    protected override void AssignRenderTarget()
+    {
+        base.AssignRenderTarget();
+
+        using (var buffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
+        {
+            var desc1 = buffer.Description1;
+            desc1.BindFlags = BindFlags.None;
+            desc1.Usage = ResourceUsage.Staging;
+            desc1.CpuAccessFlags = CpuAccessFlags.Read;
+            analysisBuffer = device.CreateTexture2D1(desc1);
+        }
     }
 
     protected override void PerLightUpdate(int index)
@@ -37,18 +52,19 @@ public class AnalysisEngine : RasterizingEngine
         context.Flush();
 
         // analyze the output
-        var desc1 = renderTargetBuffer.Description1;
-        desc1.BindFlags = BindFlags.None;
-        desc1.Usage = ResourceUsage.Staging;
-        desc1.CpuAccessFlags = CpuAccessFlags.Read;
-        ID3D11Texture2D1 tex = device.CreateTexture2D1(desc1);
-        context.CopyResource(tex, renderTargetBuffer);
-        var mapped = context.Map(tex, 0, MapMode.Read, MapFlags.None);
+        context.CopyResource(analysisBuffer, renderTargetView.Resource);
+        var mapped = context.Map(analysisBuffer, 0, MapMode.Read, MapFlags.None);
         Analyze(mapped.DataPointer, Width * Height);
-        context.Unmap(tex, 0);
-        tex.Dispose();
+        context.Unmap(analysisBuffer, 0);
 
         if (!Description.Hidden)
             swapChain.Present(0);
+    }
+
+    protected override void Dispose(bool boolean)
+    {
+        analysisBuffer?.Dispose();
+
+        base.Dispose(boolean);
     }
 }

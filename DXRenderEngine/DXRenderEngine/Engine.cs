@@ -20,6 +20,7 @@ namespace DXRenderEngine;
 /// <summary>
 /// TODO
 ///     full screen
+///     better async cpu usage?
 /// </summary>
 
 public class Engine : IDisposable
@@ -54,7 +55,6 @@ public class Engine : IDisposable
         {"bool", 4}
     };
 
-    protected ID3D11Texture2D1 renderTargetBuffer;
     protected ID3D11RenderTargetView1 renderTargetView;
     protected ID3D11VertexShader vertexShader;
     protected ID3D11PixelShader pixelShader;
@@ -86,7 +86,7 @@ public class Engine : IDisposable
     public IntPtr Handle => window.Handle;
     public bool Running { get; private set; }
     public readonly bool HasShader;
-    private bool printing = true;
+    private bool debugging = true;
     private Action Setup, Start, UserInput;
     protected Action Update { get; private set; }
     public bool Focused { get; private set; }
@@ -175,7 +175,7 @@ public class Engine : IDisposable
     {
         print("Running");
         Application.Run(window);
-        printing = false;
+        debugging = false;
         debugThread?.Join();
     }
 
@@ -209,11 +209,10 @@ public class Engine : IDisposable
         SetConstantBuffers();
     }
 
-    private void AssignRenderTarget()
+    protected virtual void AssignRenderTarget()
     {
-        renderTargetBuffer?.Dispose();
-        renderTargetBuffer = swapChain.GetBuffer<ID3D11Texture2D1>(0);
-        renderTargetView = device.CreateRenderTargetView1(renderTargetBuffer);
+        using (var buffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
+            renderTargetView = device.CreateRenderTargetView1(buffer);
         screenViewport = new(0, 0, Width, Height);
         context.RSSetViewport(screenViewport);
     }
@@ -590,7 +589,6 @@ public class Engine : IDisposable
         pixelShader?.Dispose();
         vertexShader?.Dispose();
         vertexBuffer?.Dispose();
-        renderTargetBuffer?.Dispose();
         renderTargetView?.Dispose();
         swapChain?.Dispose();
         context?.Dispose();
@@ -678,7 +676,7 @@ public class Engine : IDisposable
     {
         long t1 = sw.ElapsedTicks;
         long t2 = t1;
-        while (printing)
+        while (debugging)
         {
             // frame limiter
             while (10000000.0 / (t2 - t1) > 144.0)

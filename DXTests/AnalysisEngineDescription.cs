@@ -1,12 +1,13 @@
 ﻿namespace DXTests;
 
-internal enum Var
+internal enum Var : uint
 {
-    Theta,
-    Phi,
-    Distance,
-    Far,
-    Resolution
+    Undefined = 0,
+    Theta = 1,
+    Phi = 2,
+    Distance = 3,
+    Far = 4,
+    Resolution = 5
 }
 
 struct Vars

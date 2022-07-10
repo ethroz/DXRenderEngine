@@ -23,8 +23,8 @@ public struct POINT
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct VertexPositionNormal
 {
-    public readonly Vector3 Position;
-    public readonly Vector3 Normal;
+    public Vector3 Position;
+    public Vector3 Normal;
 
     public VertexPositionNormal(Vector3 position, Vector3 normal)
     {
@@ -36,8 +36,8 @@ public struct VertexPositionNormal
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct ScreenPositionNormal
 {
-    public readonly Vector2 Position;
-    public readonly Vector2 Normal;
+    public Vector2 Position;
+    public Vector2 Normal;
 
     public ScreenPositionNormal(Vector2 position, Vector2 normal)
     {
@@ -49,8 +49,8 @@ public struct ScreenPositionNormal
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct ObjectInstance
 {
-    public readonly Matrix4x4 World;
-    public readonly Matrix4x4 Normal;
+    public Matrix4x4 World;
+    public Matrix4x4 Normal;
 
     public ObjectInstance(Matrix4x4 world, Matrix4x4 normal)
     {
@@ -93,10 +93,10 @@ public struct Material
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct PackedGameobject
 {
-    public readonly Vector3 Position;
-    public readonly float Radius;
-    public readonly uint StartIndex;
-    public readonly uint EndIndex;
+    public Vector3 Position;
+    public float Radius;
+    public uint StartIndex;
+    public uint EndIndex;
     private long padding = 0;
 
     public PackedGameobject(Vector3 position, float radius, int startIndex, int endIndex)
@@ -175,18 +175,6 @@ public struct RasterPackedLight
         Base.Luminosity = lumin;
         Res = res;
         Far = far;
-    }
-}
-
-public unsafe struct StructPointer<T> where T : unmanaged
-{
-    public T* pointer;
-    public int size;
-
-    public StructPointer(T str)
-    {
-        pointer = &str;
-        size = Marshal.SizeOf<T>();
     }
 }
 
