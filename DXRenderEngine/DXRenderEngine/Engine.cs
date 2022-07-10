@@ -14,6 +14,7 @@ using Vortice.D3DCompiler;
 using System.Text;
 using System.Reflection;
 using static DXRenderEngine.Helpers;
+using System.Threading.Tasks;
 
 namespace DXRenderEngine;
 
@@ -91,7 +92,7 @@ public class Engine : IDisposable
     protected Action Update { get; private set; }
     public bool Focused { get; private set; }
     public readonly Input input;
-    private Thread renderThread, controlsThread, debugThread;
+    private Task renderThread, controlsThread, debugThread;
     private static Queue<string> messages = new Queue<string>();
     protected readonly Vector3 LowerAtmosphere = new(0.0f, 0.0f, 0.0f);
     protected readonly Vector3 UpperAtmosphere = new Vector3(1.0f, 1.0f, 1.0f) * 0.0f;
@@ -107,8 +108,7 @@ public class Engine : IDisposable
         sw.Restart();
 
 #if DEBUG
-        debugThread = new(() => DebugLoop());
-        debugThread.Start();
+        debugThread = Task.Factory.StartNew(DebugLoop);
 #endif
 
         print("Construction");
@@ -176,7 +176,7 @@ public class Engine : IDisposable
         print("Running");
         Application.Run(window);
         debugging = false;
-        debugThread?.Join();
+        debugThread?.Wait();
     }
 
     protected virtual void InitializeDeviceResources()
@@ -653,6 +653,15 @@ public class Engine : IDisposable
     }
 
     /////////////////////////////////////
+    
+    private void RenderLoop()
+    {
+        t1 = startFPSTime = sw.ElapsedTicks;
+        while (Running)
+        {
+            RenderFlow();
+        }
+    }
 
     protected virtual void RenderFlow()
     {
@@ -747,36 +756,26 @@ public class Engine : IDisposable
     {
         print("Shown");
 
+        GC.Collect();
+
         if (input != null)
         {
             input.InitializeInputs();
-            controlsThread = new(() => input.ControlLoop());
+            controlsThread = Task.Factory.StartNew(input.ControlLoop);
         }
 
         if (HasShader)
         {
-            renderThread = new(() =>
-            {
-                t1 = startFPSTime = sw.ElapsedTicks;
-                while (Running)
-                {
-                    RenderFlow();
-                }
-            });
+            renderThread = Task.Factory.StartNew(RenderLoop);
         }
-
-        GC.Collect();
-
-        renderThread?.Start();
-        controlsThread?.Start();
     }
 
     private void Closing(object sender, FormClosingEventArgs e)
     {
         print("Closing");
         Running = false;
-        renderThread?.Join();
-        controlsThread?.Join();
+
+        Task.WaitAll(controlsThread, renderThread);
 
         Dispose();
     }
