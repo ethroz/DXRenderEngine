@@ -4,6 +4,7 @@ using System.Numerics;
 using Vortice.DirectInput;
 using Vortice.Mathematics;
 using static DXRenderEngine.Helpers;
+using static DXRenderEngine.Win32;
 
 sealed class Program
 {
@@ -14,11 +15,11 @@ sealed class Program
     [MTAThread]
     static void Main()
     {
-        EngineDescription ED = new(ProjectionDescription.Default, "", 1920, 1080, 0,
+        EngineDescription ED = new(ProjectionDescription.Default, "", 1920, 1080, -1, -1, 0,
             FiveObjects, Start, Update, UserInput, cache: false);
 
         ED = new RasterizingEngineDescription(ED, shadows: true);
-        //ED = new RayTracingEngineDescription(ED, 1);
+        //ED = new RayTracingEngineDescription(ED, 3);
 
         engine = EngineFactory.Create(ED);
         engine.Run();

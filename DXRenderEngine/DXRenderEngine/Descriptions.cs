@@ -11,27 +11,31 @@ public class EngineDescription
     public string ShaderResource { get; protected set; }
     public int Width { get; private set; }
     public int Height { get; private set; }
+    public int X { get; internal set; }
+    public int Y { get; internal set; }
     public int RefreshRate { get; private set; }
     public readonly Action Setup, Start, Update, UserInput;
     public FormWindowState WindowState { get; internal set; }
-    public bool Resizeable { get; private set; }
+    public bool FullScreen { get; internal set; }
     public bool UseShaderCache { get; private set; }
 
     public EngineDescription(ProjectionDescription projectionDesc, string shaderResource, int width = 640, int height = 480,
-        int refreshRate = 60, Action setup = null, Action start = null, Action update = null,
-        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool resizeable = true, bool cache = false)
+        int x = -1, int y = -1, int refreshRate = 60, Action setup = null, Action start = null, Action update = null,
+        Action userInput = null, FormWindowState windowState = FormWindowState.Normal, bool fullscreen = false, bool cache = false)
     {
         ProjectionDesc = new(projectionDesc.FOVVDegrees, projectionDesc.NearPlane, projectionDesc.FarPlane, (float)width / height);
         ShaderResource = shaderResource;
         Width = width;
         Height = height;
+        X = x;
+        Y = y;
         RefreshRate = refreshRate;
         Setup = setup == null ? Empty :setup;
         Start = start == null ? Empty : start;
         Update = update == null ? Empty : update;
         UserInput = userInput;
         WindowState = windowState;
-        Resizeable = resizeable;
+        FullScreen = fullscreen;
         UseShaderCache = cache;
     }
 
@@ -41,13 +45,15 @@ public class EngineDescription
         ShaderResource = copy.ShaderResource;
         Width = copy.Width;
         Height = copy.Height;
+        X = copy.X;
+        Y = copy.Y;
         RefreshRate = copy.RefreshRate;
         Setup = copy.Setup;
         Start = copy.Start;
         Update = copy.Update;
         UserInput = copy.UserInput;
         WindowState = copy.WindowState;
-        Resizeable = copy.Resizeable;
+        FullScreen = copy.FullScreen;
         UseShaderCache = copy.UseShaderCache;
     }
 
@@ -98,7 +104,8 @@ public class RayTracingEngineDescription : EngineDescription
 public struct ProjectionDescription
 {
     public readonly float FOVVDegrees, NearPlane, FarPlane, AspectRatioWH;
-    public static readonly ProjectionDescription Default = new(60.0f, 0.01f, 1000.0f, 16.0f / 9.0f);
+
+    public static readonly ProjectionDescription Default = new(60.0f, 0.01f, 1000.0f, 1.77777777778f);
 
     public ProjectionDescription(float fovVDegrees, float nearPlane, float farPlane, float aspectRatioHW = 1.0f)
     {

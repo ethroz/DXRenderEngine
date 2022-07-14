@@ -6,6 +6,7 @@ using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
 using static DXRenderEngine.Helpers;
+using static DXRenderEngine.Time;
 
 namespace DXRenderEngine;
 
@@ -18,7 +19,7 @@ namespace DXRenderEngine;
 ///     convert to direct compute?
 /// </summary>
 
-public sealed class RayTracingEngine : Engine
+public class RayTracingEngine : Engine
 {
     public new readonly RayTracingEngineDescription Description;
     private new ScreenPositionNormal[] vertices;
@@ -31,10 +32,13 @@ public sealed class RayTracingEngine : Engine
     private int triangleCount;
     private const bool BOX = false;
 
-    public RayTracingEngine(RayTracingEngineDescription ED) : base(ED)
+    protected internal RayTracingEngine(RayTracingEngineDescription ED) : base(ED)
     {
         Description = ED;
+    }
 
+    protected override void SetInputElements()
+    {
         inputElements = new InputElementDescription[]
         {
             new("POSITION", 0, Format.R32G32_Float, 0, 0, InputClassification.PerVertexData, 0),
@@ -54,13 +58,13 @@ public sealed class RayTracingEngine : Engine
             triangleCount += gameobjects[i].Triangles.Length;
         }
 
-        ChangeShader("NUM_MATERIALS 1", "NUM_MATERIALS " + (gameobjects.Count + spheres.Count));
-        ChangeShader("NUM_OBJECTS 1", "NUM_OBJECTS " + gameobjects.Count);
-        ChangeShader("NUM_TRIS 1", "NUM_TRIS " + triangleCount);
-        ChangeShader("NUM_SPHERES 1", "NUM_SPHERES " + spheres.Count);
-        ChangeShader("NUM_LIGHTS 1", "NUM_LIGHTS " + lights.Count);
-        ChangeShader("NUM_RAYS 1", "NUM_RAYS " + (Pow(2, Description.RayDepth + 1) - 1));
-        ChangeShader("BOX false", "BOX " + BOX.ToString());
+        ModifyShaderCode("NUM_MATERIALS 1", "NUM_MATERIALS " + (gameobjects.Count + spheres.Count));
+        ModifyShaderCode("NUM_OBJECTS 1", "NUM_OBJECTS " + gameobjects.Count);
+        ModifyShaderCode("NUM_TRIS 1", "NUM_TRIS " + triangleCount);
+        ModifyShaderCode("NUM_SPHERES 1", "NUM_SPHERES " + spheres.Count);
+        ModifyShaderCode("NUM_LIGHTS 1", "NUM_LIGHTS " + lights.Count);
+        ModifyShaderCode("NUM_RAYS 1", "NUM_RAYS " + (Pow(2, Description.RayDepth + 1) - 1));
+        ModifyShaderCode("BOX false", "BOX " + BOX.ToString());
     }
 
     protected override void SetConstantBuffers()
@@ -107,8 +111,8 @@ public sealed class RayTracingEngine : Engine
         }
 
         BufferDescription bd = new(vertices.Length * Marshal.SizeOf<ScreenPositionNormal>(), BindFlags.VertexBuffer);
-        vertexBuffer = device.CreateBuffer(vertices, bd);
-        context.IASetVertexBuffer(0, new(vertexBuffer, Marshal.SizeOf<ScreenPositionNormal>()));
+        vertexBuffer = device.CreateBuffer<ScreenPositionNormal>(vertices, bd);
+        context.IASetVertexBuffer(0, vertexBuffer, Marshal.SizeOf<ScreenPositionNormal>());
     }
 
     protected override void PerApplicationUpdate()
@@ -140,7 +144,7 @@ public sealed class RayTracingEngine : Engine
 
         cBuffers[2].Insert(CreateRotation(EyeRot), 0);
         cBuffers[2].Insert(EyePos, 1);
-        cBuffers[2].Insert((float)(sw.ElapsedTicks % 60L), 2);
+        cBuffers[2].Insert((float)(Ticks % 60L), 2);
 
         UpdateConstantBuffer(2);
     }

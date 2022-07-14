@@ -16,16 +16,24 @@ public class AnalysisEngine : RasterizingEngine
         Analyze = ED.Analyze;
     }
 
-    protected override void AssignRenderTarget()
+    protected override void ReleaseRenderBuffers()
     {
-        base.AssignRenderTarget();
+        // Perform any unsetting first
+        base.ReleaseRenderBuffers();
+
+        analysisBuffer.Release();
+    }
+
+    protected override void SetRenderBuffers(int width, int height)
+    {
+        base.SetRenderBuffers(width, height);
 
         using (var buffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
         {
             var desc1 = buffer.Description1;
             desc1.BindFlags = BindFlags.None;
             desc1.Usage = ResourceUsage.Staging;
-            desc1.CpuAccessFlags = CpuAccessFlags.Read;
+            desc1.CPUAccessFlags = CpuAccessFlags.Read;
             analysisBuffer = device.CreateTexture2D1(desc1);
         }
     }

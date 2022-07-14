@@ -1,13 +1,13 @@
 ﻿using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using System.Text;
 
 namespace DXTests;
 
 [TestClass]
 public class Playground
 {
-    static Stopwatch sw;
     static Random random = new Random();
     static float value;
     static float f => random.NextSingle();
@@ -325,70 +325,103 @@ public class Playground
         return output;
     }
 
-    [TestInitialize]
-    public void TestSetup()
+    private static int FindRemix1(string str, char search, int pos = 0)
     {
-        sw = new();
+        return str.Substring(pos, str.Length - pos).IndexOf(search) + pos;
+    }
+
+    private static int FindRemix2(string str, char search, int pos = 0)
+    {
+        const int mask = 3;
+        int size = str.Length - pos;
+        int max = size - (size & mask);
+        for (int i = pos; i < max; i += 4)
+        {
+            if (str[i] == search)
+            {
+                return i;
+            }
+            if (str[i + 1] == search)
+            {
+                return i + 1;
+            }
+            if (str[i + 2] == search)
+            {
+                return i + 2;
+            }
+            if (str[i + 3] == search)
+            {
+                return i + 3;
+            }
+        }
+        for (int i = max; i < str.Length; ++i)
+        {
+            if (str[i] == search)
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     [TestMethod]
     public void LambdaVsMethod()
     {
-        int iterations = 1_000_000;
+        const int iterations = 1_000_000;
         var lambda = () =>
         {
             value += (random.NextSingle() * 2.0f - 1.0f);
         };
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             lambda();
         }
-        sw.Stop();
-        Trace.WriteLine("lambda=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("lambda=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             Method();
         }
-        sw.Stop();
-        Trace.WriteLine("method=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("method=" + (t2 - t1));
 
         var mRef = Method;
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             mRef();
         }
-        sw.Stop();
-        Trace.WriteLine("mRef=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("mRef=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             value += m;
         }
-        sw.Stop();
-        Trace.WriteLine("m=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("m=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             value += n;
         }
-        sw.Stop();
-        Trace.WriteLine("n=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("n=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             value += (random.NextSingle() * 2.0f - 1.0f);
         }
-        sw.Stop();
-        Trace.WriteLine("raw=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("raw=" + (t2 - t1));
     }
 
     [TestMethod]
@@ -423,20 +456,20 @@ public class Playground
     [TestMethod]
     public void SSEExample()
     {
-        int iterations = 1_000_000;
+        const int iterations = 1_000_000;
 
         Vector4 v = new(1.0f);
         Vector4 a = new(0.01f, 0.02f, 0.03f, 0.04f);
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             v.X += a.X;
         }
-        sw.Stop();
-        Trace.WriteLine("1element=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("1element=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             v.X += a.Z;
@@ -444,22 +477,22 @@ public class Playground
             v.Z += a.W;
             v.W += a.Y;
         }
-        sw.Stop();
-        Trace.WriteLine("4elements=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("4elements=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             v += a;
         }
-        sw.Stop();
-        Trace.WriteLine("vector=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("vector=" + (t2 - t1));
     }
 
     [TestMethod]
     public void BranchPredictionOptimizationExample()
     {
-        int iterations = 64_000_000;
+        const int iterations = 64_000_000;
 
         /////////////////////////floating point random////////////////////////////
         Trace.WriteLine("\n######### floating point random #########");
@@ -467,7 +500,7 @@ public class Playground
         /////////////////////////////////////
 
         float a = 0.0f;
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             if (f > 0.5f)
@@ -475,24 +508,24 @@ public class Playground
             else
                 a -= 1.0f;
         }
-        sw.Stop();
-        Trace.WriteLine("branching=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("branching=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             a += (int)(f * 2.0f) * 2 - 1;
         }
-        sw.Stop();
-        Trace.WriteLine("branchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = (int)(f * 2.0f) * 2 - 1;
@@ -501,13 +534,13 @@ public class Playground
             var a4 = (int)(f * 2.0f) * 2 - 1;
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("SSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("SSEBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = (int)(f * 2.0f);
@@ -520,8 +553,8 @@ public class Playground
             var a8 = a4 * 2 - 1;
             a += a5 + a6 + a7 + a8;
         }
-        sw.Stop();
-        Trace.WriteLine("pipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("pipelinedSSEBranchless=" + (t2 - t1));
 
         ////////////////////floating point random with arrays/////////////////////
         Trace.WriteLine("\n######### floating point random with arrays #########");
@@ -529,7 +562,7 @@ public class Playground
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         float[] rands = new float[iterations];
         for (int i = 0; i < iterations; i += 4)
         {
@@ -543,13 +576,13 @@ public class Playground
         {
             a += (int)(rands[i] * 2.0f) * 2 - 1;
         }
-        sw.Stop();
-        Trace.WriteLine("arrayBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("arrayBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         float[] rands2 = new float[iterations];
         for (int i = 0; i < iterations; i += 4)
         {
@@ -567,24 +600,24 @@ public class Playground
             var a4 = (int)(rands2[i + 3] * 2.0f) * 2 - 1;
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("arrayPipelinedBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("arrayPipelinedBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             a += (int)(rands[i] * 2.0f) * 2 - 1;
         }
-        sw.Stop();
-        Trace.WriteLine("preloadedBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("preloadedBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = (int)(rands[i] * 2.0f) * 2 - 1;
@@ -593,13 +626,13 @@ public class Playground
             var a4 = (int)(rands[i + 3] * 2.0f) * 2 - 1;
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("preloadedPipelinedBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("preloadedPipelinedBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = (int)(rands[i] * 2.0f);
@@ -612,8 +645,8 @@ public class Playground
             var a8 = a4 * 2 - 1;
             a += a5 + a6 + a7 + a8;
         }
-        sw.Stop();
-        Trace.WriteLine("preloadedPipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("preloadedPipelinedSSEBranchless=" + (t2 - t1));
 
         //////////////////////////////int random//////////////////////////////////
         Trace.WriteLine("\n######### int random #########");
@@ -621,7 +654,7 @@ public class Playground
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             if ((ri & 1) == 1)
@@ -629,24 +662,24 @@ public class Playground
             else
                 a -= 1.0f;
         }
-        sw.Stop();
-        Trace.WriteLine("branching=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branching=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             a += (ri & 1) * 2 - 1;
         }
-        sw.Stop();
-        Trace.WriteLine("branchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = (ri & 1) * 2 - 1;
@@ -655,13 +688,13 @@ public class Playground
             var a4 = (ri & 1) * 2 - 1;
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("SSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("SSEBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = ri & 1;
@@ -674,8 +707,8 @@ public class Playground
             var a8 = a4 * 2 - 1;
             a += a5 + a6 + a7 + a8;
         }
-        sw.Stop();
-        Trace.WriteLine("pipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("pipelinedSSEBranchless=" + (t2 - t1));
 
         //////////////////////////////byte random/////////////////////////////////
         Trace.WriteLine("\n######### byte random #########");
@@ -683,7 +716,7 @@ public class Playground
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         byte[] c1 = new byte[iterations];
         random.NextBytes(c1);
         for (int i = 0; i < iterations; ++i)
@@ -693,26 +726,26 @@ public class Playground
             else
                 a -= 1.0f;
         }
-        sw.Stop();
-        Trace.WriteLine("branching=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branching=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         byte[] c2 = new byte[iterations];
         random.NextBytes(c2);
         for (int i = 0; i < iterations; ++i)
         {
             a += (c2[i] & 1) * 2 - 1;
         }
-        sw.Stop();
-        Trace.WriteLine("branchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         byte[] c3 = new byte[iterations];
         random.NextBytes(c3);
         for (int i = 0; i < iterations; i += 4)
@@ -723,13 +756,13 @@ public class Playground
             var a4 = (c3[i + 3] & 1) * 2 - 1;
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("SSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("SSEBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         byte[] c4 = new byte[iterations];
         random.NextBytes(c4);
         for (int i = 0; i < iterations; i += 4)
@@ -744,13 +777,13 @@ public class Playground
             var a8 = a4 * 2 - 1;
             a += a5 + a6 + a7 + a8;
         }
-        sw.Stop();
-        Trace.WriteLine("pipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("pipelinedSSEBranchless=" + (t2 - t1));
 
         ///////////////// Fastest //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         byte[] c5 = new byte[iterations / 8];
         random.NextBytes(c5);
         for (int i = 0; i < iterations / 8; ++i)
@@ -773,8 +806,8 @@ public class Playground
             var b8 = a8 * 2 - 1;
             a += b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8;
         }
-        sw.Stop();
-        Trace.WriteLine("efficientPipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("efficientPipelinedSSEBranchless=" + (t2 - t1));
 
         //////////////////////////predictable pattern/////////////////////////////
         Trace.WriteLine("\n######### predictable pattern #########");
@@ -782,7 +815,7 @@ public class Playground
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             if (i % 2 == 0)
@@ -790,24 +823,24 @@ public class Playground
             else
                 a -= 1.0f;
         }
-        sw.Stop();
-        Trace.WriteLine("branching=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branching=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             a += ((i & 1) * 2 - 1);
         }
-        sw.Stop();
-        Trace.WriteLine("branchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("branchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = ((i & 1) * 2 - 1);
@@ -816,13 +849,13 @@ public class Playground
             var a4 = (((i + 3) & 1) * 2 - 1);
             a += a1 + a2 + a3 + a4;
         }
-        sw.Stop();
-        Trace.WriteLine("SSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("SSEBranchless=" + (t2 - t1));
 
         /////////////////////////////////////
 
         a = 0.0f;
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; i += 4)
         {
             var a1 = i & 1;
@@ -835,14 +868,14 @@ public class Playground
             var a8 = a4 * 2 - 1;
             a += a5 + a6 + a7 + a8;
         }
-        sw.Stop();
-        Trace.WriteLine("pipelinedSSEBranchless=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("pipelinedSSEBranchless=" + (t2 - t1));
     }
 
     [TestMethod]
     public unsafe void AnalysisOptimization()
     {
-        int pixelCount = 640*640;
+        const int pixelCount = 640*640;
         if (pixelCount % 8 != 0)
         {
             throw new NotImplementedException();
@@ -858,8 +891,8 @@ public class Playground
         fixed (int* pointer = &pixels[0])
         {
             /////////////////////////////////////
-            
-            sw.Start();
+
+            long t1 = Ticks;
             bool allWhite = true;
             int* ptr = pointer;
             for (int i = 0; i < pixelCount; ++i, ++ptr)
@@ -870,13 +903,13 @@ public class Playground
                     break;
                 }
             }
-            sw.Stop();
+            long t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("single=" + sw.ElapsedTicks);
+            Trace.WriteLine("single=" + (t2 - t1));
 
             /////////////////////////////////////
 
-            sw.Restart();
+            t1 = Ticks;
             allWhite = true;
             int result = -1;
             ptr = pointer;
@@ -888,13 +921,13 @@ public class Playground
             {
                 allWhite = false;
             }
-            sw.Stop();
+            t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("branchless=" + sw.ElapsedTicks);
+            Trace.WriteLine("branchless=" + (t2 - t1));
 
             /////////////////////////////////////
 
-            sw.Restart();
+            t1 = Ticks;
             allWhite = true;
             ptr = pointer;
             int* end = pointer + pixelCount;
@@ -908,15 +941,15 @@ public class Playground
                 }
                 ptr += 4;
             }
-            sw.Stop();
+            t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("multi=" + sw.ElapsedTicks);
+            Trace.WriteLine("multi=" + (t2 - t1));
 
             ///////////////////////////////////// 
             //              Best               //
             /////////////////////////////////////
 
-            sw.Restart();
+            t1 = Ticks;
             allWhite = true;
             ptr = pointer;
             end = pointer + pixelCount;
@@ -936,13 +969,13 @@ public class Playground
                 }
                 ptr += 8;
             }
-            sw.Stop();
+            t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("halfpipeSSE=" + sw.ElapsedTicks);
+            Trace.WriteLine("halfpipeSSE=" + (t2 - t1));
 
             /////////////////////////////////////
 
-            sw.Restart();
+            t1 = Ticks;
             allWhite = true;
             ptr = pointer;
             for (int i = 0; i < pixelCount; i += 4, ptr += 4)
@@ -957,13 +990,13 @@ public class Playground
                     allWhite = false;
                 }
             }
-            sw.Stop();
+            t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("SSE=" + sw.ElapsedTicks);
+            Trace.WriteLine("SSE=" + (t2 - t1));
 
             /////////////////////////////////////
 
-            sw.Restart();
+            t1 = Ticks;
             allWhite = true;
             ptr = pointer;
             for (int i = 0; i < pixelCount; i += 4, ptr += 4)
@@ -982,16 +1015,16 @@ public class Playground
                     allWhite = false;
                 }
             }
-            sw.Stop();
+            t2 = Ticks;
             Assert.IsTrue(allWhite);
-            Trace.WriteLine("pipelinedSSE=" + sw.ElapsedTicks);
+            Trace.WriteLine("pipelinedSSE=" + (t2 - t1));
         }
     }
 
     [TestMethod]
     public void MathvsMathF()
     {
-        int iterations = 10_000_000;
+        const int iterations = 100_000_000;
 
         float[] fRands = new float[iterations];
         double[] dRands = new double[iterations];
@@ -1015,51 +1048,51 @@ public class Playground
             dRands[i + 3] = temp8 * PI;
         }
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             MathF.Sin(fRands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("sinf=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("sinf=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             MathF.Cos(fRands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("cosf=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("cosf=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             Math.Sin(dRands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("sin=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("sin=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             Math.Cos(dRands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("cos=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("cos=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             Math.Cos(HALFPI - dRands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("sin2=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("sin2=" + (t2 - t1));
     }
 
     [TestMethod]
     public void RotationMatrixOptimization()
     {
-        int iterations = 10_000_000;
+        const int iterations = 10_000_000;
 
         Vector3[] rands = new Vector3[iterations];
         for (int i = 0; i < iterations; ++i)
@@ -1072,43 +1105,43 @@ public class Playground
             rands[i].Z = temp3 * 360.0f;
         }
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationF(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("MathF=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("MathF=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationExplicit(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("explicit=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("explicit=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationZeroInit(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("zeroinit=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("zeroinit=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationIdentityInit(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("identityInit=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("identityInit=" + (t2 - t1));
     }
 
     [TestMethod]
     public void ViewMatrixOptimization()
     {
-        int iterations = 10_000_000;
+        const int iterations = 10_000_000;
 
         Vector3[] rots = new Vector3[iterations];
         Vector3[] poss = new Vector3[iterations];
@@ -1128,51 +1161,51 @@ public class Playground
             poss[i].Z = temp6 * 30.0f;
         }
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateViewOG(poss[i], rots[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("og=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("og=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateViewRemix1(poss[i], rots[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("re1=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("re1=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateViewRemix2(poss[i], rots[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("re2=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("re2=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateViewRemix3(poss[i], rots[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("re3=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("re3=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateViewRemix4(poss[i], rots[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("re4=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("re4=" + (t2 - t1));
     }
 
     [TestMethod]
     public void RotxMatrixOptimization()
     {
-        int iterations = 10_000_000;
+        const int iterations = 10_000_000;
 
         float[] rands = new float[iterations];
         for (int i = 0; i < iterations; i += 4)
@@ -1187,21 +1220,21 @@ public class Playground
             rands[i + 3] = temp4 * 360.0f;
         }
 
-        sw.Start();
+        long t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationXOG(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("og=" + sw.ElapsedTicks);
+        long t2 = Ticks;
+        Trace.WriteLine("og=" + (t2 - t1));
 
-        sw.Restart();
+        t1 = Ticks;
         for (int i = 0; i < iterations; ++i)
         {
             CreateRotationXRemix1(rands[i]);
         }
-        sw.Stop();
-        Trace.WriteLine("re1=" + sw.ElapsedTicks);
+        t2 = Ticks;
+        Trace.WriteLine("re1=" + (t2 - t1));
     }
 
     [TestMethod]
@@ -1209,6 +1242,8 @@ public class Playground
     {
         /////////////////////////////////////
         //             Don't               //
+        /////////////////////////////////////
+        //        But I did anyways        //
         /////////////////////////////////////
         Matrix4x4 ogData = new();
 
@@ -1239,5 +1274,132 @@ public class Playground
                 Assert.AreEqual(*pointer, *ptr2);
             }
         }
+    }
+
+    [TestMethod]
+    public void WaitingExperiment()
+    {
+        print("Sleep");
+        Thread.Sleep(1);
+        print("Done");
+        const long ticks = SEC2TICK / 1000;
+        print("Delay");
+        Task.Delay(new TimeSpan(ticks)).Wait();
+        print("Done");
+    }
+
+    [TestMethod]
+    public void PrintingOptimization()
+    {
+        const int iterations = 100_000;
+        const int count = 10;
+        const int total = count * iterations;
+        const int charLimit = 20;
+
+        string[] data = new string[total];
+        Queue<string> messages = new(total);
+        Queue<int> lengths = new(total);
+        Queue<long> times = new(total);
+
+        for (int i = 0; i < total; ++i)
+        {
+            data[i] = new('a', (random.Next() % charLimit) + 1);
+            messages.Enqueue(data[i]);
+            lengths.Enqueue(data[i].Length);
+            times.Enqueue(Ticks);
+        }
+
+        long t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            int charCount = count * 22;
+            for (int j = 0; j < count; ++j)
+            {
+                charCount += lengths.Dequeue();
+            }
+            StringBuilder sb = new();
+            for (int j = 0; j < count; ++j)
+            {
+                sb.Append(times.Dequeue());
+                sb.Append(": ");
+                sb.Append(messages.Dequeue());
+                sb.Append('\n');
+            }
+            var output = sb.ToString();
+        }
+        long t2 = Ticks;
+        Trace.WriteLine("og=" + (t2 - t1));
+
+        for (int i = 0; i < total; ++i)
+        {
+            messages.Enqueue(data[i]);
+            lengths.Enqueue(data[i].Length);
+            times.Enqueue(Ticks);
+        }
+
+        t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            var output = "";
+            for (int j = 0; j < count; ++j)
+            {
+                output += times.Dequeue() + ": " + messages.Dequeue() + '\n';
+            }
+        }
+        t2 = Ticks;
+        Trace.WriteLine("re1=" + (t2 - t1));
+    }
+
+    [TestMethod]
+    public void FindOptimization()
+    {
+        const int iterations = 100_000;
+        const int length = 1_000;
+        const int total = iterations * length;
+
+        string[] strings = new string[iterations];
+        char[] matches = new char[iterations];
+        byte[] randoms = new byte[total];
+        random.NextBytes(randoms);
+        char[] chars = new char[total];
+        Encoding.ASCII.GetChars(randoms, chars);
+        int j = 0;
+        for (int i = 0; i < iterations; ++i, j += length)
+        {
+            strings[i] = new(chars, j, length);
+            matches[i] = strings[i][randoms[i] % length];
+        }
+
+        long t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            Find(strings[i], matches[i]);
+        }
+        long t2 = Ticks;
+        Trace.WriteLine("OG=" + (t2 - t1));
+
+        t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            strings[i].IndexOf(matches[i]);
+        }
+        t2 = Ticks;
+        Trace.WriteLine("std=" + (t2 - t1));
+
+        t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            FindRemix1(strings[i], matches[i]);
+        }
+        t2 = Ticks;
+        Trace.WriteLine("Re1=" + (t2 - t1));
+
+        t1 = Ticks;
+        for (int i = 0; i < iterations; ++i)
+        {
+            FindRemix2(strings[i], matches[i]);
+        }
+        t2 = Ticks;
+        Trace.WriteLine("Re2=" + (t2 - t1));
     }
 }

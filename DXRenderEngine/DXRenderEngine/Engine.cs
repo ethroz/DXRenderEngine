@@ -3,34 +3,35 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Numerics;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows.Forms;
+using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
-using System.Windows.Forms;
 using Vortice.Mathematics;
-using System.Runtime.InteropServices;
-using Vortice.D3DCompiler;
-using System.Text;
-using System.Reflection;
 using static DXRenderEngine.Helpers;
-using System.Threading.Tasks;
+using static DXRenderEngine.Logger;
+using static DXRenderEngine.Time;
 
 namespace DXRenderEngine;
 
 /// <summary>
 /// TODO
-///     full screen
-///     better async cpu usage?
+///     frame stutter -> DX12U
 /// </summary>
 
 public class Engine : IDisposable
 {
+    // DirectX fields
+    public readonly string Name;
     public readonly EngineDescription Description;
     protected Form window;
     private IDXGIFactory5 factory;
     private IDXGIAdapter4 adapter;
-    private IDXGIOutput output;
+    private IDXGIOutput display;
     protected ID3D11Device5 device;
     protected ID3D11DeviceContext3 context;
     protected IDXGISwapChain4 swapChain;
@@ -42,6 +43,7 @@ public class Engine : IDisposable
 
     protected ConstantBuffer[] cBuffers;
     protected ID3D11Buffer[] buffers;
+    protected ID3D11SamplerState[] samplers;
     private Dictionary<string, int> hlslDefMap = new();
     private Dictionary<string, int> hlslTypeMap = new()
     {
@@ -61,6 +63,7 @@ public class Engine : IDisposable
     protected ID3D11PixelShader pixelShader;
     protected Viewport screenViewport;
 
+    protected readonly string fileLocation;
     protected string shaderCode;
     protected readonly string vertexShaderEntry;
     protected readonly string pixelShaderEntry;
@@ -72,51 +75,113 @@ public class Engine : IDisposable
     // Time Fields
 
     // Represents the time since the last frame
-    public double frameTime { get; private set; }
+    public double RenderTime { get; private set; }
     // Represents the time since the last input update
     public double ElapsedTime => input.ElapsedTime;
     private long t1, t2;
-    protected static readonly Stopwatch sw = new();
-    private const long MILLISECONDS_FOR_RESET = 1000;
+    internal protected const int UNFOCUSED_TIMEOUT = 50;
+    internal const long STATS_DUR = 1000L;
     private long startFPSTime;
     private long lastReset = 0;
     private double avgFPS = 0.0, minFPS = double.PositiveInfinity, maxFPS = 0.0;
-    public long frameCount { get; private set; }
+    private long frameCount;
 
     // Engine Fields
     public IntPtr Handle => window.Handle;
     public bool Running { get; private set; }
+    public bool IsDisposed { get; private set; }
     public readonly bool HasShader;
-    private bool debugging = true;
-    private Action Setup, Start, UserInput;
-    protected Action Update { get; private set; }
+    private Action Setup => Description.Setup;
+    private Action Start => Description.Start;
+    protected Action Update => Description.Update;
     public bool Focused { get; private set; }
+    public bool FullScreen 
+    {
+        get => Description.FullScreen;
+        protected set => Description.FullScreen = value;
+    }
     public readonly Input input;
-    private Task renderThread, controlsThread, debugThread;
-    private static Queue<string> messages = new Queue<string>();
+    internal double inputAvgFPS = 0.0;
+    internal double inputAvgSleep = 0.0;
+    protected Thread uiThread, controlThread, renderThread;
+    protected volatile Queue<Action> commands = new();
     protected readonly Vector3 LowerAtmosphere = new(0.0f, 0.0f, 0.0f);
     protected readonly Vector3 UpperAtmosphere = new Vector3(1.0f, 1.0f, 1.0f) * 0.0f;
-    public readonly List<Gameobject> gameobjects = new List<Gameobject>();
-    public readonly List<Light> lights = new List<Light>();
+    public readonly List<Gameobject> gameobjects = new();
+    public readonly List<Light> lights = new();
     public Vector3 EyePos;
     public Vector3 EyeRot;
     public Vector3 EyeStartPos;
     public Vector3 EyeStartRot;
 
-    public Engine(EngineDescription desc)
+    // Methods
+    public void Run()
     {
-        sw.Restart();
+        print("Running");
+        uiThread = Thread.CurrentThread;
+        uiThread.Name = "UI";
+        Application.Run(window);
+    }
 
-#if DEBUG
-        debugThread = Task.Factory.StartNew(DebugLoop);
-#endif
+    public void ToggleFullscreen()
+    {
+        // Make sure we are the UI thread.
+        if (Thread.CurrentThread != uiThread)
+        {
+            // Queue the command to run when we are not rendering
+            commands.Enqueue(() => { window.Invoke(ToggleFullscreen); });
+            return;
+        }
 
+        if (FullScreen)
+        {
+            FullScreen = false;
+
+            SetRenderBuffers(Description.Width, Description.Height);
+            window.ClientSize = new(Description.Width, Description.Height);
+            window.FormBorderStyle = FormBorderStyle.Fixed3D;
+            window.Location = new(Description.X, Description.Y);
+        }
+        else
+        {
+            FullScreen = true;
+
+            SetRenderBuffers(Screen.PrimaryScreen.Bounds.Size.Width, Screen.PrimaryScreen.Bounds.Size.Height);
+            window.FormBorderStyle = FormBorderStyle.None;
+            window.ClientSize = new(Screen.PrimaryScreen.Bounds.Size.Width, Screen.PrimaryScreen.Bounds.Size.Height);
+            window.Location = new();
+        }
+    }
+
+    public void Stop()
+    {
+        if (Running)
+        {
+            if (Thread.CurrentThread != uiThread)
+                window.BeginInvoke(window.Close);
+            else
+                window.Close();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (IsDisposed) return;
+        IsDisposed = true;
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    /////////////////////////////////////
+
+    protected internal Engine(EngineDescription desc)
+    {
         print("Construction");
         Description = desc;
-        Setup = desc.Setup;
-        Start = desc.Start;
-        Update = desc.Update;
-        UserInput = desc.UserInput;
+        IsDisposed = false;
+
+        Name = GetType().Name;
+        fileLocation = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
 
         HasShader = desc.ShaderResource.Length != 0;
 
@@ -124,42 +189,19 @@ public class Engine : IDisposable
         {
             vertexShaderEntry = "vertexShader";
             pixelShaderEntry = "pixelShader";
-
-            int endNamesp = desc.ShaderResource.IndexOf('.');
-            string namesp = desc.ShaderResource.Substring(0, endNamesp);
-            Assembly assembly = Assembly.Load(namesp);
-            using (Stream stream = assembly.GetManifestResourceStream(desc.ShaderResource))
-            using (StreamReader reader = new(stream))
-            {
-                shaderCode = reader.ReadToEnd();
-            }
-
-            inputElements = new InputElementDescription[]
-            {
-                new("POSITION", 0, Format.R32G32B32_Float, 0, 0, InputClassification.PerVertexData, 0),
-                new("NORMAL", 0, Format.R32G32B32_Float, 12, 0, InputClassification.PerVertexData, 0),
-            };
+            GetEmbeddedShader();
+            SetInputElements();
         }
         else
         {
-            print("No shader");
+            print("Continuing with no shader");
         }
 
-        Application.EnableVisualStyles();
-
-        window = new()
-        {
-            Text = "DXRenderEngine",
-            ClientSize = new(desc.Width, desc.Height),
-            FormBorderStyle = FormBorderStyle.Fixed3D,
-            BackColor = System.Drawing.Color.Black,
-            WindowState = desc.WindowState,
-            StartPosition = FormStartPosition.CenterScreen
-        };
+        ConstructWindow();
 
         if (desc.UserInput != null)
         {
-            input = new(window.Handle, this, UserInput);
+            input = new(window.Handle, this, desc.UserInput);
         }
 
         window.Load += Window_Load;
@@ -167,16 +209,58 @@ public class Engine : IDisposable
         window.GotFocus += GotFocus;
         window.LostFocus += LostFocus;
         Focused = window.Focused;
-        window.Resize += Window_Resize;
         window.FormClosing += Closing;
     }
 
-    public void Run()
+    protected virtual void GetEmbeddedShader()
     {
-        print("Running");
-        Application.Run(window);
-        debugging = false;
-        debugThread?.Wait();
+        int endNamesp = Description.ShaderResource.IndexOf('.');
+        string namesp = Description.ShaderResource.Substring(0, endNamesp);
+        Assembly assembly = Assembly.Load(namesp);
+        using (Stream stream = assembly.GetManifestResourceStream(Description.ShaderResource))
+        using (StreamReader reader = new(stream))
+        {
+            shaderCode = reader.ReadToEnd();
+        }
+    }
+
+    protected virtual void SetInputElements()
+    {
+        inputElements = new InputElementDescription[]
+        {
+            new("POSITION", 0, Format.R32G32B32_Float, 0, 0, InputClassification.PerVertexData, 0),
+            new("NORMAL", 0, Format.R32G32B32_Float, 12, 0, InputClassification.PerVertexData, 0),
+        };
+    }
+
+    protected virtual void ConstructWindow()
+    {
+        window = new()
+        {
+            Text = Name,
+            ClientSize = new(Description.Width, Description.Height),
+            FormBorderStyle = FormBorderStyle.Fixed3D,
+            BackColor = System.Drawing.Color.Black,
+            WindowState = Description.WindowState,
+            MaximizeBox = false
+        };
+
+        if (Description.X == -1 || Description.Y == -1)
+        {
+            window.StartPosition = FormStartPosition.CenterScreen;
+
+            // Save the window position upon showing
+            commands.Enqueue(() =>
+            {
+                Description.X = window.Location.X;
+                Description.Y = window.Location.Y;
+            });
+        }
+        else
+        {
+            window.StartPosition = FormStartPosition.Manual;
+            window.Location = new System.Drawing.Point(Description.X, Description.Y);
+        }
     }
 
     protected virtual void InitializeDeviceResources()
@@ -196,25 +280,45 @@ public class Engine : IDisposable
         SwapChainDescription1 scd = new(Width, Height, Format.R8G8B8A8_UNorm);
         swapChain = new(factory.CreateSwapChainForHwnd(device, window.Handle, scd).NativePointer);
 
-        AssignRenderTarget();
+        SetRenderBuffers(Width, Height);
 
-        UpdateShaderConstants();
+        if (HasShader)
+        {
+            UpdateShaderConstants();
 
-        InitializeShaders();
+            InitializeShaders();
 
-        long time1 = sw.ElapsedMilliseconds;
-        ParseConstantBuffers();
-        print("Buffer parsing time=" + (sw.ElapsedMilliseconds - time1) + "ms");
+            long time1 = Milliseconds;
+            // get any hlsl defs in case arrays use them in the shader
+            GetDefs();
 
-        SetConstantBuffers();
+            ParseConstantBuffers();
+
+            ParseSamplers();
+            print("Shader parsing time=" + (Milliseconds - time1) + "ms");
+
+            SetConstantBuffers();
+        }
     }
 
-    protected virtual void AssignRenderTarget()
+    protected virtual void SetRenderBuffers(int width, int height)
     {
+        if (renderTargetView != null)
+        {
+            ReleaseRenderBuffers();
+            swapChain.ResizeBuffers(0, width, height);
+        }
+
         using (var buffer = swapChain.GetBuffer<ID3D11Texture2D1>(0))
             renderTargetView = device.CreateRenderTargetView1(buffer);
-        screenViewport = new(0, 0, Width, Height);
+        screenViewport = new(0, 0, width, height);
         context.RSSetViewport(screenViewport);
+    }
+
+    protected virtual void ReleaseRenderBuffers()
+    {
+        context.UnsetRenderTargets();
+        renderTargetView.Release();
     }
 
     protected virtual void InitializeVertices()
@@ -222,9 +326,8 @@ public class Engine : IDisposable
         PackVertices();
 
         BufferDescription bd = new(vertices.Length * Marshal.SizeOf<VertexPositionNormal>(), BindFlags.VertexBuffer);
-        vertexBuffer = device.CreateBuffer(vertices, bd);
-        VertexBufferView view = new(vertexBuffer, Marshal.SizeOf<VertexPositionNormal>());
-        context.IASetVertexBuffer(0, view);
+        vertexBuffer = device.CreateBuffer<VertexPositionNormal>(vertices, bd);
+        context.IASetVertexBuffer(0, vertexBuffer, Marshal.SizeOf<VertexPositionNormal>());
     }
 
     protected virtual void PackVertices()
@@ -258,7 +361,7 @@ public class Engine : IDisposable
             gameobjects.Add(new());
     }
 
-    protected void ChangeShader(string target, string newValue)
+    protected void ModifyShaderCode(string target, string newValue)
     {
         int index = shaderCode.IndexOf(target);
         if (index == -1)
@@ -287,13 +390,357 @@ public class Engine : IDisposable
 
         if (indices.Count > 0)
         {
-            // get any hlsl defs in case arrays use them in buffers
-            GetDefs();
-
             // get all the items in each buffer
             for (int i = 0; i < indices.Count; ++i)
             {
                 cBuffers[i] = new ConstantBuffer(ParseBlock(indices[i]));
+            }
+        }
+    }
+
+    protected void ParseSamplers()
+    {
+        // get the number of samplers
+        int count = 0;
+        int index = 0;
+        while (true)
+        {
+            int startType = shaderCode.IndexOf("SamplerState", index + 1);
+            if (startType == -1)
+            {
+                startType = shaderCode.IndexOf("SamplerComparisonState", index + 1);
+                if (startType == -1)
+                    break;
+            }
+
+            index = startType;
+            int endType = Find(shaderCode, ' ', startType);
+            int startName = FindNot(shaderCode, ' ', endType);
+            int endName = Find(shaderCode, ' ', startName);
+            Trace.Assert(endName != -1);
+
+            int openBracket = Find(shaderCode, '[', startName);
+            int arraySize = 1;
+
+            // if there is an array
+            if (openBracket != -1 && openBracket < endName)
+            {
+                int closeBracket = Find(shaderCode, ']', openBracket);
+                string arraySizeString = shaderCode.Substring(openBracket + 1, closeBracket - openBracket - 1);
+
+                // literal
+                if (char.IsDigit(arraySizeString[0]))
+                {
+                    // uint for array size
+                    if (arraySizeString.EndsWith('u'))
+                    {
+                        arraySizeString = arraySizeString.Substring(0, arraySizeString.Length - 1);
+                    }
+
+                    arraySize = int.Parse(arraySizeString);
+                }
+                // def
+                else if (!hlslDefMap.TryGetValue(arraySizeString, out arraySize))
+                {
+                    throw new Exception(string.Format("\"{}\" is not defined in HLSL shader", arraySizeString));
+                }
+            }
+
+            count += arraySize;
+        }
+
+        samplers = new ID3D11SamplerState[count];
+    }
+
+    protected virtual void InitializeShaders()
+    {
+        Blob shaderBlob = GetShader(vertexShaderEntry, "VertexShader", "vs_5_0");
+        vertexShader = device.CreateVertexShader(shaderBlob);
+
+        inputLayout = device.CreateInputLayout(inputElements, shaderBlob);
+        context.IASetInputLayout(inputLayout);
+        context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+
+        shaderBlob.Dispose();
+
+        shaderBlob = GetShader(pixelShaderEntry, "PixelShader", "ps_5_0");
+        pixelShader = device.CreatePixelShader(shaderBlob);
+        shaderBlob.Dispose();
+
+        context.VSSetShader(vertexShader);
+        context.PSSetShader(pixelShader);
+    }
+
+    protected Blob GetShader(string entryPoint, string sourceName, string profile)
+    {
+        string file = fileLocation + Name + entryPoint + "Cache.blob";
+        if (Description.UseShaderCache && File.Exists(profile))
+        {
+            return Compiler.ReadFileToBlob(profile);
+        }
+        else
+        {
+            ShaderFlags sf = ShaderFlags.OptimizationLevel3;
+#if DEBUG
+            sf = ShaderFlags.Debug;
+#endif
+            Compiler.Compile(shaderCode, null, null, entryPoint, sourceName, profile, sf, out Blob shaderBlob, out Blob errorCode);
+            if (shaderBlob == null)
+                throw new("HLSL " + sourceName + " compilation error:\r\n" + errorCode.AsString());
+
+            errorCode?.Dispose();
+            Compiler.WriteBlobToFile(shaderBlob, file, true);
+            return shaderBlob;
+        }
+    }
+
+    protected virtual void SetConstantBuffers()
+    {
+        EyeStartPos = EyePos;
+        EyeStartRot = EyeRot;
+
+        buffers = new ID3D11Buffer[cBuffers.Length];
+
+        BufferDescription bd = new(0, BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
+        for (int i = 0; i < cBuffers.Length; ++i)
+        {
+            bd.ByteWidth = cBuffers[i].GetSize();
+            buffers[i] = device.CreateBuffer(bd);
+        }
+    }
+
+    protected void UpdateConstantBuffer(int index, MapMode mode = MapMode.WriteNoOverwrite)
+    {
+        MappedSubresource resource = context.Map(buffers[index], mode);
+        cBuffers[index].Copy(resource.DataPointer);
+        context.Unmap(buffers[index]);
+    }
+
+    protected void GetTime()
+    {
+        t2 = Ticks;
+        if (Description.RefreshRate != 0)
+        {
+            long max = (long)(SEC2TICK / (double)Description.RefreshRate);
+            while ((t2 - t1) < max)
+            {
+                t2 = Ticks;
+            }
+        }
+        RenderTime = (t2 - t1) * TICK2SEC;
+        t1 = t2;
+        double fps = 1.0 / RenderTime;
+        maxFPS = Math.Max(fps, maxFPS);
+        minFPS = Math.Min(fps, minFPS);
+        frameCount++;
+
+        // reset counters
+        if (Milliseconds / STATS_DUR > lastReset)
+        {
+            avgFPS = frameCount / (double)(Ticks - startFPSTime) * SEC2TICK;
+            startFPSTime = Ticks;
+            string text = Name + "   Frame: " + avgFPS.ToString("G4") +
+            "fps (" + minFPS.ToString("G4") + "fps, " + maxFPS.ToString("G4") + "fps)   Input: "
+            + inputAvgFPS.ToString("G4") + "fps (" + inputAvgSleep.ToString("G3") + ")";
+            window.BeginInvoke(new(() => window.Text = text));
+            maxFPS = 0.0;
+            minFPS = double.PositiveInfinity;
+            frameCount = 0;
+            lastReset = Milliseconds / STATS_DUR;
+        }
+    }
+
+    // subclasses should always dispose this last and never assume that anything will be set
+    protected virtual void Dispose(bool boolean)
+    {
+        gameobjects.Clear();
+        lights.Clear();
+        commands.Clear();
+        commands = null;
+        if (buffers != null)
+            foreach (var buffer in buffers)
+                buffer?.Dispose();
+        if (samplers != null)
+            foreach (var sampler in samplers)
+                sampler?.Dispose();
+        inputLayout?.Dispose();
+        pixelShader?.Dispose();
+        vertexShader?.Dispose();
+        vertexBuffer?.Dispose();
+        renderTargetView?.Dispose();
+        swapChain?.Dispose();
+        context?.Dispose();
+        display?.Dispose();
+        adapter?.Dispose();
+        device?.Dispose();
+        input?.Dispose();
+        window?.Dispose();
+    }
+
+    protected virtual void RenderFlow()
+    {
+        GetTime();
+        if (!Focused)
+        {
+            Thread.Sleep(UNFOCUSED_TIMEOUT);
+            return;
+        }
+        Render();
+        Update();
+        PerFrameUpdate();
+        swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
+    }
+
+    protected virtual void PerApplicationUpdate()
+    {
+        foreach (Light l in lights)
+            l.GenerateMatrix();
+    }
+
+    protected virtual void PerFrameUpdate()
+    {
+        // objects can only move in between frames
+        foreach (var go in gameobjects)
+            go.CreateMatrices();
+    }
+
+    protected virtual void PerLightUpdate(int index)
+    {
+    }
+
+    protected virtual void PerObjectUpdate(int index)
+    {
+
+    }
+
+    protected virtual void Render()
+    {
+
+    }
+
+    /////////////////////////////////////
+
+    private void Window_Load(object sender, EventArgs e)
+    {
+        print("Loading");
+        Running = true;
+        Setup();
+        InitializeDeviceResources();
+        GetDisplayRefreshRate();
+        if (HasShader)
+            InitializeVertices();
+        Start();
+        PerApplicationUpdate();
+    }
+
+    private void Window_Shown(object sender, EventArgs e)
+    {
+        print("Shown");
+
+        GC.Collect();
+
+        if (input != null)
+        {
+            input.InitializeInputs();
+            controlThread = new(input.ControlLoop);
+            controlThread.IsBackground = true;
+            controlThread.Name = "Input";
+            controlThread.Start();
+        }
+
+        // Always start the render thread
+        renderThread = new(RenderLoop);
+        renderThread.IsBackground = true;
+        renderThread.Name = "Render";
+        renderThread.Start();
+
+        if (FullScreen)
+        {
+            ToggleFullscreen();
+        }
+    }
+
+    private void Closing(object sender, FormClosingEventArgs e)
+    {
+        print("Closing");
+        Running = false;
+
+        // wait up to a second for the threads to exit
+        long startWait = Ticks + SEC2TICK;
+        Thread[] threads = new Thread[] { controlThread, renderThread };
+        bool allDone = false;
+        while (startWait > Ticks)
+        {
+            int done = 0;
+            foreach (var t in threads)
+                if (t == null || !t.IsAlive)
+                    ++done;
+            if (done == threads.Length)
+            {
+                allDone = true;
+                break;
+            }
+        }
+        if (!allDone)
+        {
+            for (int i = 0; i < threads.Length; ++i)
+            {
+                if (threads[i] != null)
+                {
+                    print("Aborting " + threads[i].Name + " thread");
+                    threads[i] = null;
+                }
+            }
+        }
+
+        Dispose();
+    }
+
+    private void GotFocus(object sender, EventArgs e)
+    {
+        Focused = true;
+    }
+
+    private void LostFocus(object sender, EventArgs e)
+    {
+        Focused = false;
+    }
+
+    private void GetDisplayRefreshRate()
+    {
+        int num = 0;
+        int main = -1;
+        displayRefreshRate = 0.0f;
+        Screen screen = Screen.FromPoint(window.Location);
+        List<IDXGIOutput> displays = new List<IDXGIOutput>();
+        while (true)
+        {
+            adapter.EnumOutputs(num, out IDXGIOutput output);
+            if (output == null)
+                break;
+            displays.Add(output);
+            var modes = output.GetDisplayModeList(Format.R8G8B8A8_UNorm, DisplayModeEnumerationFlags.DisabledStereo);
+            foreach (var mode in modes)
+            {
+                float rate = mode.RefreshRate.Numerator / (float)mode.RefreshRate.Denominator;
+                if (screen.Bounds.Width == mode.Width && screen.Bounds.Height == mode.Height && rate > displayRefreshRate)
+                {
+                    displayRefreshRate = rate;
+                    main = num;
+                }
+            }
+            num++;
+        }
+
+        for (int i = 0; i < displays.Count; ++i)
+        {
+            if (i == main)
+            {
+                display = displays[i];
+            }
+            else
+            {
+                displays[i].Release();
             }
         }
     }
@@ -433,169 +880,16 @@ public class Engine : IDisposable
 
         return sizes.ToArray();
     }
-
-    protected virtual void InitializeShaders()
+    
+    private void RenderLoop()
     {
-        string fileLocation = Directory.GetCurrentDirectory();
-        string vertexShaderFile = fileLocation + @"\VertexShaderCache.blob";
-        string pixelShaderFile = fileLocation + @"\PixelShaderCache.blob";
-
-        ShaderFlags sf = ShaderFlags.OptimizationLevel3;
-#if DEBUG
-        sf = ShaderFlags.Debug;
-#endif
-
-        Blob shaderBlob;
-        if (Description.UseShaderCache && File.Exists(vertexShaderFile))
+        t1 = startFPSTime = Ticks;
+        while (Running)
         {
-            shaderBlob = Compiler.ReadFileToBlob(vertexShaderFile);
+            while (commands.Count != 0)
+                commands.Dequeue()();
+            RenderFlow();
         }
-        else
-        {
-            Compiler.Compile(shaderCode, null, null, vertexShaderEntry, "VertexShader", "vs_5_0", sf, out shaderBlob, out Blob errorCode);
-            if (shaderBlob == null)
-                throw new("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
-
-            errorCode?.Dispose();
-            Compiler.WriteBlobToFile(shaderBlob, vertexShaderFile, true);
-        }
-
-        vertexShader = device.CreateVertexShader(shaderBlob);
-
-        inputLayout = device.CreateInputLayout(inputElements, shaderBlob);
-        context.IASetInputLayout(inputLayout);
-        context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
-
-        shaderBlob.Dispose();
-
-        if (Description.UseShaderCache && File.Exists(pixelShaderFile))
-        {
-            shaderBlob = Compiler.ReadFileToBlob(pixelShaderFile);
-        }
-        else
-        {
-            Compiler.Compile(shaderCode, null, null, pixelShaderEntry, "PixelShader", "ps_5_0", sf, out shaderBlob, out Blob errorCode);
-            if (shaderBlob == null)
-                throw new("HLSL pixel shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
-
-            errorCode?.Dispose();
-            Compiler.WriteBlobToFile(shaderBlob, pixelShaderFile, true);
-        }
-
-        pixelShader = device.CreatePixelShader(shaderBlob);
-
-        shaderBlob.Dispose();
-
-        context.VSSetShader(vertexShader);
-        context.PSSetShader(pixelShader);
-    }
-
-    protected virtual void SetConstantBuffers()
-    {
-        EyeStartPos = EyePos;
-        EyeStartRot = EyeRot;
-
-        buffers = new ID3D11Buffer[cBuffers.Length];
-
-        BufferDescription bd = new(0, BindFlags.ConstantBuffer, ResourceUsage.Dynamic, CpuAccessFlags.Write);
-        for (int i = 0; i < cBuffers.Length; ++i)
-        {
-            bd.SizeInBytes = cBuffers[i].GetSize();
-            buffers[i] = device.CreateBuffer(bd);
-        }
-    }
-
-    protected void UpdateConstantBuffer(int index, MapMode mode = MapMode.WriteNoOverwrite)
-    {
-        MappedSubresource resource = context.Map(buffers[index], mode);
-        cBuffers[index].Copy(resource.DataPointer);
-        context.Unmap(buffers[index]);
-    }
-
-    protected void GetTime()
-    {
-        t2 = sw.ElapsedTicks;
-        frameTime = (t2 - t1) / 10000000.0;
-        if (Description.RefreshRate != 0)
-        {
-            while (1.0 / (frameTime) > Description.RefreshRate)
-            {
-                t2 = sw.ElapsedTicks;
-                frameTime = (t2 - t1) / 10000000.0;
-            }
-        }
-        t1 = t2;
-        double fps = 1.0 / frameTime;
-        maxFPS = Math.Max(fps, maxFPS);
-        minFPS = Math.Min(fps, minFPS);
-        frameCount++;
-
-        // reset counters
-        if (sw.ElapsedMilliseconds / MILLISECONDS_FOR_RESET > lastReset)
-        {
-            avgFPS = 10000000.0 * frameCount / (sw.ElapsedTicks - startFPSTime);
-            startFPSTime = sw.ElapsedTicks;
-            string text = "DXRenderEngine   " + avgFPS.ToString("G4") +
-            "fps (" + minFPS.ToString("G4") + "fps, " + maxFPS.ToString("G4") + "fps)";
-            window.BeginInvoke(new(() => window.Text = text));
-            maxFPS = 0.0;
-            minFPS = double.PositiveInfinity;
-            frameCount = 0;
-            lastReset = sw.ElapsedMilliseconds / MILLISECONDS_FOR_RESET;
-        }
-    }
-
-    public void Stop()
-    {
-        if (Running)
-            window.BeginInvoke(window.Close);
-    }
-
-    public void ToggleFullscreen()
-    {
-        if (swapChain.IsFullscreen)
-        {
-            window.ClientSize = new System.Drawing.Size(Description.Width, Description.Height);
-        }
-        else
-        {
-            window.ClientSize = Screen.PrimaryScreen.Bounds.Size;
-        }
-    }
-
-    private void Resize()
-    {
-        renderTargetView.Release();
-        swapChain.ResizeBuffers(0, Width, Height);
-
-        AssignRenderTarget();
-    }
-
-    public void Dispose()
-    {
-        Dispose(true);
-        GC.SuppressFinalize(this);
-    }
-
-    // subclasses should always dispose this last and never assume that anything will be set
-    protected virtual void Dispose(bool boolean)
-    {
-        Stop();
-        if (buffers != null)
-            foreach (var buffer in buffers)
-                buffer?.Dispose();
-        input?.Dispose();
-        inputLayout?.Dispose();
-        pixelShader?.Dispose();
-        vertexShader?.Dispose();
-        vertexBuffer?.Dispose();
-        renderTargetView?.Dispose();
-        swapChain?.Dispose();
-        context?.Dispose();
-        output?.Dispose();
-        adapter?.Dispose();
-        device?.Dispose();
-        window?.Dispose();
     }
 
     private void GetRefCounts()
@@ -650,200 +944,5 @@ public class Engine : IDisposable
             }
         }
         print("Total Refs: " + total);
-    }
-
-    /////////////////////////////////////
-    
-    private void RenderLoop()
-    {
-        t1 = startFPSTime = sw.ElapsedTicks;
-        while (Running)
-        {
-            RenderFlow();
-        }
-    }
-
-    protected virtual void RenderFlow()
-    {
-        //long c1 = sw.ElapsedTicks;
-        GetTime();
-        if (!Focused)
-            return;
-        //long c2 = sw.ElapsedTicks;
-        Render();
-        //long c3 = sw.ElapsedTicks;
-        Update();
-        //long c4 = sw.ElapsedTicks;
-        PerFrameUpdate();
-        //long c5 = sw.ElapsedTicks;
-        swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
-        //long c6 = sw.ElapsedTicks;
-        //print("GetTime:" + (c2 - c1) + " Render:" + (c3 - c2) + " Update:" + (c4 - c3) + " Frame:" + (c5 - c4) + " Present:" + (c6 - c5));
-    }
-
-    private void DebugLoop()
-    {
-        long t1 = sw.ElapsedTicks;
-        long t2 = t1;
-        while (debugging)
-        {
-            // frame limiter
-            while (10000000.0 / (t2 - t1) > 144.0)
-            {
-                t2 = sw.ElapsedTicks;
-            }
-
-            // message printer
-            if (messages.Count > 0)
-            {
-                string output = "";
-                while (messages.Count > 0)
-                {
-                    output += messages.Dequeue() + "\n";
-                }
-                Debug.Write(output);
-            }
-        }
-    }
-
-    protected virtual void PerApplicationUpdate()
-    {
-        foreach (Light l in lights)
-            l.GenerateMatrix();
-    }
-
-    protected virtual void PerFrameUpdate()
-    {
-        // objects can only move in between frames
-        foreach (var go in gameobjects)
-            go.CreateMatrices();
-    }
-
-    protected virtual void PerLightUpdate(int index)
-    {
-    }
-
-    protected virtual void PerObjectUpdate(int index)
-    {
-
-    }
-
-    protected virtual void Render()
-    {
-        context.ClearRenderTargetView(renderTargetView, Colors.Black);
-        context.OMSetRenderTargets(renderTargetView);
-        context.Draw(vertices.Length, 0);
-    }
-
-    /////////////////////////////////////
-
-    private void Window_Load(object sender, EventArgs e)
-    {
-        print("Loading");
-        Running = true;
-        Setup();
-        if (HasShader)
-        {
-            InitializeDeviceResources();
-            GetDisplayRefreshRate();
-            InitializeVertices();
-        }
-        Start();
-        PerApplicationUpdate();
-    }
-
-    private void Window_Shown(object sender, EventArgs e)
-    {
-        print("Shown");
-
-        GC.Collect();
-
-        if (input != null)
-        {
-            input.InitializeInputs();
-            controlsThread = Task.Factory.StartNew(input.ControlLoop);
-        }
-
-        if (HasShader)
-        {
-            renderThread = Task.Factory.StartNew(RenderLoop);
-        }
-    }
-
-    private void Closing(object sender, FormClosingEventArgs e)
-    {
-        print("Closing");
-        Running = false;
-
-        Task.WaitAll(controlsThread, renderThread);
-
-        Dispose();
-    }
-
-    private void LostFocus(object sender, EventArgs e)
-    {
-        Focused = false;
-    }
-
-    private void GotFocus(object sender, EventArgs e)
-    {
-        Focused = true;
-    }
-
-    private void Window_Resize(object sender, EventArgs e)
-    {
-        if (!Description.Resizeable || !HasShader) return;
-
-        print("resize");
-        if (window.ClientSize == Screen.PrimaryScreen.Bounds.Size)
-            if (!swapChain.IsFullscreen)
-                swapChain.SetFullscreenState(true);
-        else if (swapChain.IsFullscreen)
-            swapChain.SetFullscreenState(false);
-
-        Resize();
-    }
-
-    private void GetDisplayRefreshRate()
-    {
-        int num = 0;
-        int main = -1;
-        List<IDXGIOutput> outputs = new List<IDXGIOutput>();
-        while (true)
-        {
-            outputs.Add(adapter.GetOutput(num));
-            if (output == null)
-                break;
-            var modes = output.GetDisplayModeList(Format.R8G8B8A8_UNorm, DisplayModeEnumerationFlags.DisabledStereo);
-            foreach (var mode in modes)
-            {
-                float temp = mode.RefreshRate.Numerator / (float)mode.RefreshRate.Denominator;
-                if (temp > displayRefreshRate)
-                {
-                    displayRefreshRate = temp;
-                    main = num;
-                }
-            }
-            num++;
-            output.Release();
-        }
-
-        for (int i = 0; i < outputs.Count; ++i)
-        {
-            if (i == main)
-            {
-                output = outputs[i];
-            }
-            else
-            {
-                outputs[i].Release();
-            }
-        }
-    }
-
-    [Conditional("DEBUG")]
-    public static void print(object message = null)
-    {
-        messages.Enqueue(sw.ElapsedTicks + ": " + message?.ToString());
     }
 }

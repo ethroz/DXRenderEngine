@@ -7,19 +7,6 @@ using static DXRenderEngine.Helpers;
 
 namespace DXRenderEngine;
 
-[StructLayout(LayoutKind.Sequential)]
-public struct POINT
-{
-    public int X;
-    public int Y;
-
-    public POINT(int x, int y)
-    {
-        X = x;
-        Y = y;
-    }
-}
-
 [StructLayout(LayoutKind.Sequential, Pack = 16)]
 public struct VertexPositionNormal
 {

@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 using Vortice.DirectInput;
+using static DXRenderEngine.Time;
+using static DXRenderEngine.Win32;
 
 namespace DXRenderEngine;
 
@@ -22,11 +23,13 @@ public class Input : IDisposable
 
     // input fields
     public const int POLLING_RATE = 250;
-    public const int SLEEP_TIME = 100;
+    private const int KEYBOARD_BUFFER_SIZE = 256;
     public double ElapsedTime { get; private set; }
     private long t1, t2;
-    private readonly Stopwatch sw = new();
-    private const int KEYBOARD_BUFFER_SIZE = 256;
+    private long startFPSTime;
+    private long lastReset = 0;
+    private int sleepTime = 0;
+    private long loopCount;
 
     public Input(IntPtr handle, Engine reference, Action userInput)
     {
@@ -71,7 +74,6 @@ public class Input : IDisposable
         buttons = new Button[allButtons.Length];
         for (int i = 0; i < allButtons.Length; ++i)
             buttons[i] = new();
-        GetCursorPos(out mousePos);
     }
 
     private void InitializeKeyboard()
@@ -99,6 +101,7 @@ public class Input : IDisposable
 
     public void GetMouseData()
     {
+        Trace.Assert(mouse.Acquire().Success);
         var state = mouse.GetCurrentMouseState();
         var butons = state.Buttons;
         for (int i = 0; i < butons.Length; ++i)
@@ -110,12 +113,13 @@ public class Input : IDisposable
             buttons[i].Raised = !pressed;
         }
         deltaMousePos = new(state.X, state.Y);
-        GetCursorPos(out mousePos);
+        GetCursorPos(out mousePos); // TODO: Is this causing mouse glitching in fullscreen?
         deltaMouseScroll = state.Z / 120;
     }
 
     public void GetKeys()
     {
+        Trace.Assert(keyboard.Acquire().Success);
         KeyboardState state = keyboard.GetCurrentKeyboardState();
         for (int i = 0; i < KEYBOARD_BUFFER_SIZE; ++i)
         {
@@ -131,24 +135,45 @@ public class Input : IDisposable
 
     private void GetTime()
     {
-        t2 = sw.ElapsedTicks;
-        ElapsedTime = (t2 - t1) / 10000000.0;
+        t2 = Ticks;
         if (POLLING_RATE != 0)
         {
-            while (1.0 / ElapsedTime > POLLING_RATE)
+            const long max = (long)(SEC2TICK / (double)POLLING_RATE);
+            if (1.0 / POLLING_RATE >= 0.001)
             {
-                t2 = sw.ElapsedTicks;
-                ElapsedTime = (t2 - t1) / 10000000.0;
+                int remaining = (int)((max - t2 + t1) / 10000.0);
+                if (remaining > 0)
+                {
+                    Thread.Sleep(remaining);
+                    sleepTime += remaining;
+                }
+                t2 = Ticks;
+            }
+            while ((t2 - t1) < max)
+            {
+                t2 = Ticks;
             }
         }
+        ElapsedTime = (t2 - t1) * TICK2SEC;
         t1 = t2;
-        //Engine.print("Updates per Second: " + (1.0 / (elapsedTime)).ToString("G4"));
+        ++loopCount;
+
+        // reset counters
+        if (Milliseconds / Engine.STATS_DUR > lastReset)
+        {
+            reference.inputAvgFPS = loopCount / (double)(Ticks - startFPSTime) * SEC2TICK;
+            startFPSTime = Ticks;
+            reference.inputAvgSleep = sleepTime / (double)loopCount;
+            sleepTime = 0;
+            loopCount = 0;
+            lastReset = Milliseconds / Engine.STATS_DUR;
+        }
     }
 
-    public void ControlLoop()
+    internal void ControlLoop()
     {
-        sw.Start();
-        t1 = sw.ElapsedTicks;
+        t1 = startFPSTime = Ticks;
+
         while (reference.Running)
         {
             if (reference.Focused)
@@ -163,7 +188,7 @@ public class Input : IDisposable
             }
             else
             {
-                Thread.Sleep(SLEEP_TIME);
+                Thread.Sleep(Engine.UNFOCUSED_TIMEOUT);
             }
         }
     }
@@ -236,23 +261,15 @@ public class Input : IDisposable
 
     protected virtual void Dispose(bool boolean)
     {
-        Trace.Assert(mouse != null);
         if (mouse.NativePointer != IntPtr.Zero)
         {
             mouse.Unacquire();
             mouse.Dispose();
         }
-        Trace.Assert(keyboard != null);
         if (keyboard.NativePointer != IntPtr.Zero)
         {
             keyboard.Unacquire();
             keyboard.Dispose();
         }
     }
-
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out POINT lpPoint);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetModuleHandle(string lpModuleName);
 }

@@ -238,7 +238,7 @@ namespace DXRenderEngine
 
         public static Matrix4x4 CreateProjection(float fovVDegrees, float aspectRatioHW, float nearPlane, float farPlane)
         {
-            float fFovRad = 1.0f / (float)Math.Tan(fovVDegrees * 0.5f * DEG2RAD);
+            float fFovRad = 1.0f / (float)Math.Tan(fovVDegrees * 0.5 * DEG2RAD);
             Matrix4x4 output = new();
             output.M11 = fFovRad;
             output.M22 = aspectRatioHW * fFovRad;

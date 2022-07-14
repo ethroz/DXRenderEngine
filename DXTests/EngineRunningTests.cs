@@ -29,7 +29,7 @@ public class EngineRunningTests
         resultsPath += Path.DirectorySeparatorChar + "Results" + Path.DirectorySeparatorChar;
 
         // Get the correct file suffix to avoid overwriting
-        if (!Overwrite)
+        if (Overwrite == 0)
         {
             fileSuffix = 0;
             var files = Directory.GetFiles(resultsPath);
@@ -51,23 +51,27 @@ public class EngineRunningTests
             }
             ++fileSuffix;
         }
+        else
+        {
+            fileSuffix = Overwrite;
+        }
     }
 
     const bool Hidden = true;
-    const bool DoManual = false;
+    const bool DoManual = true;
     const bool Save = false;
-    const bool Overwrite = false;
+    const int Overwrite = 0;
 
     static AnalysisEngine engine;
-    static Stopwatch sw;
-    static List<double> biases;
+    static List<double> biases = new();
     static readonly string resultsPath;
-    static readonly int fileSuffix = 1;
+    static readonly int fileSuffix;
+    static long t1;
     static bool allWhite;
     static int magIndex;
-    static int last;
-    static double lo;
-    static double hi;
+    static int lastIndex;
+    static double loBias;
+    static double hiBias;
     const double loStart = -0.001;
     const double hiStart = 7.0;
     static readonly double threshold = 1.1 / Pow(10, maxSigFigs);
@@ -76,9 +80,9 @@ public class EngineRunningTests
     static readonly double[] magnitudes;
     static Vars v1;
     static Vars v2;
-    static float min;
-    static float max;
-    static float inc;
+    static float minimum;
+    static float maximum;
+    static float increment;
     static bool Manual;
     const float MoveSpeed = 4.0f;
     const float Sensitivity = 0.084f;
@@ -132,10 +136,10 @@ public class EngineRunningTests
             Trace.WriteLine("v=" + v2.ToString() + " bias=" + engine.DepthBias);
         biases.Add(engine.DepthBias);
 
-        v2 += inc;
+        v2 += increment;
 
         // exit condition
-        if (v2 > max)
+        if (v2 > maximum)
             engine.Stop();
 
         // reset
@@ -146,13 +150,13 @@ public class EngineRunningTests
     private static void SmartNext()
     {
         Next();
-        double diff = Round(Math.Abs(engine.DepthBias - lo), true);
+        double diff = Round(Math.Abs(engine.DepthBias - loBias), true);
         if (diff == 0.0)
             magIndex = maxSigFigs;
         else
             magIndex = Math.Min((int)Math.Log10(1.0 / diff) + 1, maxSigFigs);
-        lo = engine.DepthBias;
-        ChangeBias(Math.Sign(inc) * magnitudes[magIndex]);
+        loBias = engine.DepthBias;
+        ChangeBias(Math.Sign(increment) * magnitudes[magIndex]);
     }
 
     private static void ChangeBias(double amount)
@@ -172,8 +176,8 @@ public class EngineRunningTests
 
     private static void ResetPointers()
     {
-        lo = loStart;
-        hi = hiStart;
+        loBias = loStart;
+        hiBias = hiStart;
         engine.DepthBias = 0.0;
     }
 
@@ -190,21 +194,21 @@ public class EngineRunningTests
         {
             if (allWhite)
             {
-                if (hi - lo < threshold)
+                if (hiBias - loBias < threshold)
                 {
                     Next();
                     ResetPointers();
                 }
                 else
                 {
-                    hi = engine.DepthBias;
-                    SetBias((hi + lo) / 2.0, false);
+                    hiBias = engine.DepthBias;
+                    SetBias((hiBias + loBias) / 2.0, false);
                 }
             }
             else
             {
-                lo = engine.DepthBias;
-                SetBias((hi + lo) / 2.0, true);
+                loBias = engine.DepthBias;
+                SetBias((hiBias + loBias) / 2.0, true);
             }
         }
     }
@@ -218,8 +222,8 @@ public class EngineRunningTests
         if (magIndex == -2)
         {
             magIndex = 0;
-            last = 0;
-            lo = 0.0;
+            lastIndex = 0;
+            loBias = 0.0;
             engine.DepthBias = 0.0;
         }
         // remove all shadow acne from the plane
@@ -227,44 +231,44 @@ public class EngineRunningTests
         {
             if (allWhite)
             {
-                if (last > 0)
+                if (lastIndex > 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         SmartNext();
                     }
                     else
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(-magnitudes[magIndex++] * 0.9);
                     }
                 }
                 else
                 {
-                    last--;
+                    lastIndex--;
                     ChangeBias(-magnitudes[magIndex]);
                 }
             }
             else
             {
-                if (last < 0)
+                if (lastIndex < 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(magnitudes[magIndex]);
                         SmartNext();
                     }
                     else
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(magnitudes[magIndex++] * 0.9);
                     }
                 }
                 else
                 {
-                    last++;
+                    lastIndex++;
                     ChangeBias(magnitudes[magIndex]);
                 }
             }
@@ -283,44 +287,44 @@ public class EngineRunningTests
         {
             if (allWhite)
             {
-                if (last > 0)
+                if (lastIndex > 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         Next();
                     }
                     else
                     {
-                        last = 1;
+                        lastIndex = 1;
                         ChangeBias(-magnitudes[magIndex] + magnitudes[++magIndex]);
                     }
                 }
                 else
                 {
-                    last--;
+                    lastIndex--;
                     ChangeBias(-magnitudes[magIndex]);
                 }
             }
             else
             {
-                if (last < 0)
+                if (lastIndex < 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(magnitudes[magIndex]);
                         Next();
                     }
                     else
                     {
-                        last = -1;
+                        lastIndex = -1;
                         ChangeBias(magnitudes[magIndex] - magnitudes[++magIndex]);
                     }
                 }
                 else
                 {
-                    last++;
+                    lastIndex++;
                     ChangeBias(magnitudes[magIndex]);
                 }
             }
@@ -339,46 +343,46 @@ public class EngineRunningTests
         {
             if (allWhite)
             {
-                if (last > 0)
+                if (lastIndex > 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         Next();
                         engine.DepthBias = 0.0;
                     }
                     else
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(-magnitudes[magIndex++] * 0.9);
                     }
                 }
                 else
                 {
-                    last--;
+                    lastIndex--;
                     ChangeBias(-magnitudes[magIndex]);
                 }
             }
             else
             {
-                if (last < 0)
+                if (lastIndex < 0)
                 {
                     if (magIndex == magnitudes.Length - 1)
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(magnitudes[magIndex]);
                         Next();
                         engine.DepthBias = 0.0;
                     }
                     else
                     {
-                        last = 0;
+                        lastIndex = 0;
                         ChangeBias(magnitudes[magIndex++] * 0.1);
                     }
                 }
                 else
                 {
-                    last++;
+                    lastIndex++;
                     ChangeBias(magnitudes[magIndex]);
                 }
             }
@@ -388,7 +392,7 @@ public class EngineRunningTests
     private static void TimedStop()
     {
         // Just wait to exit
-        if (sw.ElapsedMilliseconds > 2000)
+        if (Milliseconds - t1 > 2000)
         {
             engine.Stop();
         }
@@ -492,7 +496,7 @@ public class EngineRunningTests
 
         // find max variable sig figs
         int varFigs = 0;
-        for (float i = min; i < max; i += inc)
+        for (float i = minimum; i < maximum; i += increment)
         {
             varFigs = Math.Max((int)Math.Log10(1.0 / Math.Abs(i)), varFigs);
         }
@@ -500,8 +504,8 @@ public class EngineRunningTests
 
         // format and save
         string[] lines = new string[biases.Count];
-        float val = min;
-        for (int i = 0; i < lines.Length; ++i, val += inc)
+        float val = minimum;
+        for (int i = 0; i < lines.Length; ++i, val += increment)
             lines[i] = string.Format("{0:F" + varFigs + "}\t{1:F" + maxSigFigs + "}", val, biases[i]);
         File.WriteAllLines(path, lines);
         Trace.WriteLine("Saved to: " + path);
@@ -537,15 +541,15 @@ public class EngineRunningTests
 
     private static void CreateAndRun(Var var, float min, float max, float inc, float f1, float f2, float f3, float f4)
     {
-        EngineRunningTests.min = min;
-        EngineRunningTests.max = max;
-        EngineRunningTests.inc = inc;
+        minimum = min;
+        maximum = max;
+        increment = inc;
         v2 = new(var, min, f1, f2, f3, f4);
 
-        engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, update: SmartSearch, 
-            windowState: Hidden ? FormWindowState.Minimized : FormWindowState.Normal, resizeable: !Hidden), shadows: true), 
+        engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, -1, -1, 0, setup: Setup, update: SmartSearch, 
+            windowState: Hidden ? FormWindowState.Minimized : FormWindowState.Normal), shadows: true), 
             Analyzer, Hidden, Manual));
-        sw.Start();
+        t1 = Milliseconds;
         engine.Run();
         engine.Dispose();
 
@@ -555,26 +559,17 @@ public class EngineRunningTests
     [TestInitialize]
     public void TestSetup()
     {
-        sw = new();
-        biases = new();
         magIndex = -2;
-        last = 0;
+        lastIndex = 0;
         Manual = false;
     }
 
     [TestCleanup]
     public void TestClean()
     {
-        sw.Stop();
-        sw = null;
         biases.Clear();
-        biases = null;
         if (engine != null)
-        {
-            if (engine.Running)
-                engine.Stop();
             engine.Dispose();
-        }
         engine = null;
     }
 
@@ -591,7 +586,6 @@ public class EngineRunningTests
 
         Manual = false; // With this set to false, changing variable value will reset the eye position and view direction
         engine.Run();
-        engine.Dispose();
     }
 
     [TestMethod]
@@ -606,9 +600,28 @@ public class EngineRunningTests
             Analyzer, Hidden, Manual));
 
         engine.DepthBias = 1.0f;
-        sw.Start();
+        t1 = Milliseconds;
         engine.Run();
-        engine.Dispose();
+    }
+
+    [TestMethod]
+    public void ThreadAbort()
+    {
+        if (!DoManual)
+            return;
+
+        Engine eng = null;
+        bool loopRan = false;
+
+        var update = () =>
+        {
+            eng.Stop();
+            while (true) { loopRan = true; }
+        };
+
+        eng = EngineFactory.Create(new(new(), "", update: update));
+        eng.Run();
+        Assert.IsTrue(loopRan);
     }
 
     [TestMethod]

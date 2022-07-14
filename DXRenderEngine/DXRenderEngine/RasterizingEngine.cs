@@ -1,10 +1,10 @@
-﻿using System.Text;
-using Vortice.D3DCompiler;
+﻿using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 using Vortice.Mathematics;
 using static DXRenderEngine.Helpers;
+using static DXRenderEngine.Time;
 
 namespace DXRenderEngine;
 
@@ -23,22 +23,24 @@ public class RasterizingEngine : Engine
     protected ID3D11GeometryShader shadowGeometryShader;
     protected ID3D11PixelShader shadowPixelShader;
 
+    protected Texture2DDescription1 depthViewDescription;
+    protected DepthStencilViewDescription stencilViewDescription;
     protected ID3D11DepthStencilState depthState;
     protected ID3D11Texture2D1 depthBuffer;
     protected ID3D11DepthStencilView depthView;
 
+    protected Texture2DDescription1 lightViewDesciption;
     protected ID3D11RasterizerState2 lightingRasterizer;
     protected ID3D11Texture2D1 lightViewTexture;
     protected ID3D11RenderTargetView1 lightingTargetView;
 
-    protected ID3D11SamplerState[] samplers;
     protected ID3D11ShaderResourceView1[] shadowMaps;
 
     protected RasterPackedLight[] packedLights;
 
     protected static readonly Color4 backgroundColor = new Color4(0.0f, 0.0f, 0.0f, float.PositiveInfinity);
 
-    public RasterizingEngine(RasterizingEngineDescription ED) : base(ED)
+    protected internal RasterizingEngine(RasterizingEngineDescription ED) : base(ED)
     {
         Description = ED;
     }
@@ -47,47 +49,81 @@ public class RasterizingEngine : Engine
     {
         base.UpdateShaderConstants();
 
-        ChangeShader("NUM_LIGHTS 1", "NUM_LIGHTS " + lights.Count);
+        ModifyShaderCode("NUM_LIGHTS 1", "NUM_LIGHTS " + lights.Count);
     }
 
     protected override void InitializeDeviceResources()
     {
+        CreateRenderDescriptions();
+
         base.InitializeDeviceResources();
+
         InitializeRasterResources();
     }
 
-    private void InitializeRasterResources()
+    protected virtual void CreateRenderDescriptions()
     {
-        // light rendertargets
-        Texture2DDescription1 td = new(
+        lightViewDesciption = new(
             Format.R32G32B32A32_Float,
             Width,
             Height,
             bindFlags: BindFlags.ShaderResource | BindFlags.RenderTarget);
+        depthViewDescription = new(
+            Format.D32_Float,
+            Width,
+            Height,
+            bindFlags: BindFlags.DepthStencil);
+        stencilViewDescription = new(
+            DepthStencilViewDimension.Texture2D,
+            Format.D32_Float);
+    }
 
-        // lighting rendertarget
-        lightViewTexture = device.CreateTexture2D1(td);
+    protected override void SetRenderBuffers(int width, int height)
+    {
+        // Perform any resizing first
+        base.SetRenderBuffers(width, height);
+
+        // lighting rendertargets
+        lightViewDesciption.Width = width;
+        lightViewDesciption.Height = height;
+        lightViewTexture = device.CreateTexture2D1(lightViewDesciption);
         lightingTargetView = device.CreateRenderTargetView1(lightViewTexture);
 
+        // depth buffers
+        depthViewDescription.Width = width;
+        depthViewDescription.Height = height;
+        depthBuffer = device.CreateTexture2D1(depthViewDescription);
+        depthView = device.CreateDepthStencilView(depthBuffer, stencilViewDescription);
+    }
+
+    protected override void ReleaseRenderBuffers()
+    {
+        // Perform any unsetting first
+        base.ReleaseRenderBuffers();
+
+        // lighting rendertargets
+        lightViewTexture.Release();
+        lightingTargetView.Release();
+
+        // depth buffers
+        depthBuffer.Release();
+        depthView.Release();
+    }
+
+    private void InitializeRasterResources()
+    {
         // depth buffers
         DepthStencilDescription dssdesc = DepthStencilDescription.Default;
         depthState = device.CreateDepthStencilState(dssdesc);
         context.OMSetDepthStencilState(depthState);
-        td.BindFlags = BindFlags.DepthStencil;
-        td.Format = Format.D32_Float;
-        depthBuffer = device.CreateTexture2D1(td);
-        DepthStencilViewDescription dsvdesc = new(
-            DepthStencilViewDimension.Texture2D,
-            Format.D32_Float);
-        depthView = device.CreateDepthStencilView(depthBuffer, dsvdesc);
         RasterizerDescription2 rsdesc =
             Description.Wireframe
             ? RasterizerDescription2.Wireframe
-            : RasterizerDescription2.CullCounterClockwise;
+            : RasterizerDescription2.CullBack;
         lightingRasterizer = device.CreateRasterizerState2(rsdesc);
 
         // shadow buffer
-        dsvdesc = new(
+        DepthStencilViewDescription dsvdesc = new(
             DepthStencilViewDimension.Texture2DArray,
             Format.D32_Float,
             arraySize: 6);
@@ -95,9 +131,9 @@ public class RasterizingEngine : Engine
             ShaderResourceViewDimension.TextureCube,
             Format.R32_Float,
             0, 1);
-        td = new(Format.R32_Typeless, 1, 1, 6, 1,
-            bindFlags: BindFlags.ShaderResource | BindFlags.DepthStencil,
-            optionFlags: ResourceOptionFlags.TextureCube);
+        Texture2DDescription1 td = new(Format.R32_Typeless, 1, 1, 6, 1,
+            bindFlags: BindFlags.ShaderResource | BindFlags.DepthStencil, 
+            miscFlags: ResourceOptionFlags.TextureCube);
 
         shadowMaps = new ID3D11ShaderResourceView1[lights.Count];
         for (int i = 0; i < lights.Count; ++i)
@@ -111,7 +147,7 @@ public class RasterizingEngine : Engine
         }
 
         // shadow rasterizer
-        rsdesc = RasterizerDescription2.CullCounterClockwise;
+        rsdesc = RasterizerDescription2.CullBack;
         shadowRasterizer = device.CreateRasterizerState2(rsdesc);
     }
 
@@ -119,30 +155,16 @@ public class RasterizingEngine : Engine
     {
         base.InitializeShaders();
 
-        ShaderFlags sf = ShaderFlags.OptimizationLevel3;
-#if DEBUG
-        sf = ShaderFlags.Debug;
-#endif
-
-        Compiler.Compile(shaderCode, null, null, "shadowVertexShader", "VertexShader", "vs_5_0", sf, out Blob shaderBlob, out Blob errorCode);
-        if (shaderBlob == null)
-            throw new("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
+        Blob shaderBlob = GetShader("shadowVertexShader", "VertexShader", "vs_5_0");
         shadowVertexShader = device.CreateVertexShader(shaderBlob);
-
         shaderBlob.Dispose();
 
-        Compiler.Compile(shaderCode, null, null, "shadowGeometryShader", "GeometryShader", "gs_5_0", sf, out shaderBlob, out errorCode);
-        if (shaderBlob == null)
-            throw new("HLSL vertex shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
+        shaderBlob = GetShader("shadowGeometryShader", "GeometryShader", "gs_5_0");
         shadowGeometryShader = device.CreateGeometryShader(shaderBlob);
-
         shaderBlob.Dispose();
 
-        Compiler.Compile(shaderCode, null, null, "shadowPixelShader", "PixelShader", "ps_5_0", sf, out shaderBlob, out errorCode);
-        if (shaderBlob == null)
-            throw new("HLSL pixel shader compilation error:\r\n" + Encoding.ASCII.GetString(errorCode.GetBytes()));
+        shaderBlob = GetShader("shadowPixelShader", "PixelShader", "ps_5_0");
         shadowPixelShader = device.CreatePixelShader(shaderBlob);
-
         shaderBlob.Dispose();
 
         samplers = new ID3D11SamplerState[2];
@@ -198,7 +220,7 @@ public class RasterizingEngine : Engine
 
         cBuffers[1].Insert(CreateView(EyePos, EyeRot), 0);
         cBuffers[1].Insert(EyePos, 1);
-        cBuffers[1].Insert((float)(sw.ElapsedTicks % 60L), 2);
+        cBuffers[1].Insert((float)(Ticks % 60L), 2);
         cBuffers[1].InsertArray(packedLights, 3);
 
         foreach (var l in lights)
@@ -297,14 +319,14 @@ public class RasterizingEngine : Engine
 
     protected override void Dispose(bool boolean)
     {
+        if (shadowMaps != null)
+            foreach (var map in shadowMaps)
+                map?.Dispose();
         lightingTargetView?.Dispose();
         lightingRasterizer?.Dispose();
         shadowPixelShader?.Dispose();
         shadowVertexShader?.Dispose();
         shadowRasterizer?.Dispose();
-        if (samplers != null)
-            foreach (var sampler in samplers)
-                sampler?.Dispose();
         depthView?.Dispose();
         depthState?.Dispose();
         depthBuffer?.Dispose();
