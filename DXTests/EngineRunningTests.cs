@@ -28,6 +28,12 @@ public class EngineRunningTests
             resultsPath = Directory.GetParent(resultsPath).FullName;
         resultsPath += Path.DirectorySeparatorChar + "Results" + Path.DirectorySeparatorChar;
 
+        // Make the directory if it doesnt exist
+        if (!Directory.Exists(resultsPath))
+        {
+            Directory.CreateDirectory(resultsPath);
+        }
+
         // Get the correct file suffix to avoid overwriting
         if (Overwrite == 0)
         {
@@ -58,15 +64,16 @@ public class EngineRunningTests
     }
 
     const bool Hidden = true;
-    const bool DoManual = true;
-    const bool Save = false;
-    const int Overwrite = 0;
+    const bool DoManual = false;
+    const bool Save = true;
+    const int Overwrite = 1;
 
     static AnalysisEngine engine;
     static List<double> biases = new();
     static readonly string resultsPath;
     static readonly int fileSuffix;
     static long t1;
+    static bool done;
     static bool allWhite;
     static int magIndex;
     static int lastIndex;
@@ -75,29 +82,26 @@ public class EngineRunningTests
     const double loStart = -0.001;
     const double hiStart = 7.0;
     static readonly double threshold = 1.1 / Pow(10, maxSigFigs);
-    const int minSigFigs = 0;
-    const int maxSigFigs = 4;
+    public const int minSigFigs = 0;
+    public const int maxSigFigs = 4;
     static readonly double[] magnitudes;
-    static Vars v1;
-    static Vars v2;
-    static float minimum;
-    static float maximum;
-    static float increment;
+    static Vars values;
+    static float done100;
     static bool Manual;
     const float MoveSpeed = 4.0f;
     const float Sensitivity = 0.084f;
 
     private static void UpdateConstants()
     {
-        float phi = -v2.phi;
-        engine.lights[0].Position = new(0.0f, (float)(v2.dist * Math.Cos(phi * DEG2RAD)), (float)(v2.dist * Math.Sin(phi * DEG2RAD)));
-        engine.lights[0].FarPlane = v2.far;
-        engine.lights[0].ShadowRes = v2.res;
-        float total = phi - v2.theta;
+        float phi = -values.Phi;
+        engine.lights[0].Position = new(0.0f, (float)(values.Dist * Math.Cos(phi * DEG2RAD)), (float)(values.Dist * Math.Sin(phi * DEG2RAD)));
+        engine.lights[0].FarPlane = values.Far;
+        engine.lights[0].ShadowRes = values.Res;
+        float total = phi - values.Theta;
         engine.gameobjects[0].Rotation.X = total;
         if (!Manual)
         {
-            float eyeDist = engine.Description.ProjectionDesc.NearPlane * 1.0001f;
+            float eyeDist = Math.Max(values.Dist / values.Res, engine.Description.ProjectionDesc.NearPlane * 1.0001f);
             engine.EyePos = new(0.0f, (float)(eyeDist * Math.Cos(total * DEG2RAD)), (float)(eyeDist * Math.Sin(total * DEG2RAD)));
             engine.EyeRot = new(90.0f + total, 0.0f, 0.0f);
         }
@@ -133,14 +137,14 @@ public class EngineRunningTests
         if (engine.DepthBias == 0.0)
             engine.DepthBias = 0.0;
         if (!Hidden)
-            Trace.WriteLine("v=" + v2.ToString() + " bias=" + engine.DepthBias);
+            print(values.VariablesWithValues() + "bias=" + engine.DepthBias.ToString("F" + maxSigFigs));
         biases.Add(engine.DepthBias);
 
-        v2 += increment;
-
-        // exit condition
-        if (v2 > maximum)
+        if (values.Increment())
+        {
+            done = true;
             engine.Stop();
+        }
 
         // reset
         magIndex = 0;
@@ -150,13 +154,22 @@ public class EngineRunningTests
     private static void SmartNext()
     {
         Next();
-        double diff = Round(Math.Abs(engine.DepthBias - loBias), true);
-        if (diff == 0.0)
-            magIndex = maxSigFigs;
+        if (values.GetVar() == values.GetMin())
+        {
+            lastIndex = 0;
+            loBias = 0.0;
+            engine.DepthBias = 0.0;
+        }
         else
-            magIndex = Math.Min((int)Math.Log10(1.0 / diff) + 1, maxSigFigs);
-        loBias = engine.DepthBias;
-        ChangeBias(Math.Sign(increment) * magnitudes[magIndex]);
+        {
+            double diff = Round(Math.Abs(engine.DepthBias - loBias), true);
+            if (diff == 0.0)
+                magIndex = maxSigFigs;
+            else
+                magIndex = Math.Min((int)Math.Log10(1.0 / diff) + 1, maxSigFigs);
+            loBias = engine.DepthBias;
+            ChangeBias(Math.Sign(values.GetInc()) * magnitudes[magIndex]);
+        }
     }
 
     private static void ChangeBias(double amount)
@@ -472,16 +485,13 @@ public class EngineRunningTests
             m = -1;
         if (engine.input.KeyDown(Key.Right))
             m = 1;
-        if (engine.input.KeyHeld(Key.LeftShift))
-            m *= 10;
-
-        v2 += m;
 
         // print if buttons pressed
         if (m != 0 || mult != 0.0 || engine.input.KeyDown(Key.Backslash))
         {
-            Trace.WriteLine(string.Format("bias={0:F" + maxSigFigs + "} theta={1} phi={2} light={3} plane={4}", 
-                engine.DepthBias, v2.theta, v2.phi, engine.lights[0].Position, engine.gameobjects[0].Rotation.X));
+            values.Increment();
+            print(string.Format("bias={0:F" + maxSigFigs + "} theta={1} phi={2} light={3} plane={4}", 
+                engine.DepthBias, values.Theta, values.Phi, engine.lights[0].Position, engine.gameobjects[0].Rotation.X));
             UpdateConstants();
         }
     }
@@ -492,23 +502,60 @@ public class EngineRunningTests
             return;
 
         // get path
-        string path = resultsPath + v2.var.ToString() + fileSuffix + ".txt";
+        string path = resultsPath + values.VariablesWithoutValues() + '#' + fileSuffix + ".txt";
 
-        // find max variable sig figs
-        int varFigs = 0;
-        for (float i = minimum; i < maximum; i += increment)
-        {
-            varFigs = Math.Max((int)Math.Log10(1.0 / Math.Abs(i)), varFigs);
-        }
-        varFigs = Math.Min(varFigs, 4);
+        // reset the variables to go through them again.
+        values.Reset();
 
         // format and save
-        string[] lines = new string[biases.Count];
-        float val = minimum;
-        for (int i = 0; i < lines.Length; ++i, val += increment)
-            lines[i] = string.Format("{0:F" + varFigs + "}\t{1:F" + maxSigFigs + "}", val, biases[i]);
+        const int maxCols = 5;
+        int numRows = values.GetIterations() + 1;
+        int numCols = values.GetIterations(1);
+        int numTables = values.NumTables();
+        if (numCols > maxCols)
+            numTables *= (int)MathF.Ceiling(numCols / (float)maxCols);
+        string[] lines = new string[numRows * numTables + 1];
+        lines[0] = "Constants: " + values.ConstantsWithValues();
+        int baseRange = 0;
+        int tableStart = 1;
+        int rowIndex = 0;
+        int colIndex = 0;
+        int biasIndex = 0;
+        while (true)
+        {
+            if (rowIndex >= numRows)
+            {
+                if (++colIndex >= numCols)
+                {
+                    rowIndex = 0;
+                    colIndex = 0;
+                    baseRange = 0;
+                    tableStart += numRows;
+                }
+                else if (colIndex % maxCols == 0)
+                {
+                    rowIndex = 0;
+                    tableStart += numRows;
+                }
+                else
+                {
+                    rowIndex = 1;
+                }
+            }
+            if (rowIndex == 0)
+            {
+                int next = Math.Min(baseRange + maxCols, numCols);
+                lines[tableStart + rowIndex++] = values.VariablesGetTableRange(baseRange, next);
+                baseRange = next;
+            }
+            if (colIndex % maxCols == 0)
+                lines[tableStart + rowIndex] = values.GetVar().ToString("G" + maxSigFigs);
+            lines[tableStart + rowIndex++] += '\t' + biases[biasIndex++].ToString("F" + maxSigFigs);
+            if (values.Increment())
+                break;
+        }
         File.WriteAllLines(path, lines);
-        Trace.WriteLine("Saved to: " + path);
+        print("Saved to: " + path);
     }
 
     private static unsafe void Analyzer(IntPtr pointer, int length)
@@ -539,19 +586,35 @@ public class EngineRunningTests
         }
     }
 
-    private static void CreateAndRun(Var var, float min, float max, float inc, float f1, float f2, float f3, float f4)
+    private static void GetPercentDenominator()
     {
-        minimum = min;
-        maximum = max;
-        increment = inc;
-        v2 = new(var, min, f1, f2, f3, f4);
+        done100 = 1.0f;
+        for (int i = 0; i < values.GetSize(); ++i)
+            done100 *= values.GetIterations(i);
+    }
 
+    private static string PercentDone()
+    {
+        float percent = 0.0f;
+        float last = 1.0f;
+        for (int i = 0; i < values.GetSize(); ++i)
+        {
+            percent += (values.GetVar(i) - values.GetMin(i)) / values.GetInc(i) * last;
+            last *= values.GetIterations(i);
+        }
+        percent *= 100.0f / done100;
+        return percent.ToString("F1"); 
+    }
+
+    private static void CreateAndRun()
+    {
+        GetPercentDenominator();
         engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, -1, -1, 0, setup: Setup, update: SmartSearch, 
             windowState: Hidden ? FormWindowState.Minimized : FormWindowState.Normal), shadows: true), 
-            Analyzer, Hidden, Manual));
+            Analyzer, PercentDone, Hidden, Manual));
         t1 = Milliseconds;
         engine.Run();
-        engine.Dispose();
+        Assert.IsTrue(done);
 
         SaveResults();
     }
@@ -562,6 +625,8 @@ public class EngineRunningTests
         magIndex = -2;
         lastIndex = 0;
         Manual = false;
+        values = new();
+        done = false;
     }
 
     [TestCleanup]
@@ -579,10 +644,13 @@ public class EngineRunningTests
         if (!DoManual)
             return;
 
-        v2 = new(Var.Distance, 100.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
+        values =
+            new(0.0f, 0.0f, 10.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Theta },
+            new Range[] { new(0.0f, 89.0f, 1.0f) });
 
         engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, userInput: UserInput), shadows: true), 
-            Analyzer, false, Manual));
+            Analyzer, null, false, Manual));
 
         Manual = false; // With this set to false, changing variable value will reset the eye position and view direction
         engine.Run();
@@ -594,10 +662,13 @@ public class EngineRunningTests
         if (Hidden || !DoManual)
             return;
 
-        v2 = new(Var.Phi, 0.0f, 0.0f, 10.0f, 100.0f, 4096.0f);
+        values =
+            new(0.0f, 0.0f, 10.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Theta },
+            new Range[] { new(0.0f, 89.0f, 1.0f) });
 
         engine = new(new(new(new(new(90.0f, 0.01f, 100.0f), "", 640, 640, 0, setup: Setup, update: TimedStop), shadows: true),
-            Analyzer, Hidden, Manual));
+            Analyzer, null, Hidden, Manual));
 
         engine.DepthBias = 1.0f;
         t1 = Milliseconds;
@@ -625,20 +696,52 @@ public class EngineRunningTests
     }
 
     [TestMethod]
-    public void Shadow_Test_Theta()
+    public void Bias_Theta()
     {
-        CreateAndRun(Var.Theta, 0.0f, 89.0f, 1.0f, 0.0f, 10.0f, 100.0f, 4096.0f);
+        values = 
+            new(0.0f, 0.0f, 10.0f, 100.0f, 4096.0f, 
+            new Var[] { Var.Theta }, 
+            new Range[] { new(0.0f, 90.0f, 1.0f) });
+        CreateAndRun();
     }
 
     [TestMethod]
-    public void Shadow_Test_Distance()
+    public void Bias_Distance()
     {
-        CreateAndRun(Var.Distance, 1.0f, 99.0f, 1.0f, 0.0f, 0.0f, 100.0f, 4096.0f);
+        values =
+            new(0.0f, 0.0f, 1.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Dist },
+            new Range[] { new(1.0f, 100.0f, 1.0f) });
+        CreateAndRun();
     }
 
     [TestMethod]
-    public void Shadow_Test_Phi()
+    public void Bias_Phi()
     {
-        CreateAndRun(Var.Phi, 0.0f, 89.0f, 1.0f, 0.0f, 10.0f, 100.0f, 4096.0f);
+        values =
+            new(0.0f, 0.0f, 10.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Dist },
+            new Range[] { new(0.0f, 90.0f, 1.0f) });
+        CreateAndRun();
+    }
+
+    [TestMethod]
+    public void Bias2_Distance_Theta()
+    {
+        values =
+            new(0.0f, 0.0f, 1.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Theta, Var.Dist },
+            new Range[] { new(0.0f, 90.0f, 1.0f), new(5.0f, 100.0f, 5.0f) });
+        CreateAndRun();
+    }
+
+    [TestMethod]
+    public void SmallDoubleVar()
+    {
+        values =
+            new(0.0f, 0.0f, 0.0f, 100.0f, 4096.0f,
+            new Var[] { Var.Theta, Var.Dist },
+            new Range[] { new(0.0f, 90.0f, 10.0f), new(10.0f, 100.0f, 10.0f) });
+        CreateAndRun();
     }
 }

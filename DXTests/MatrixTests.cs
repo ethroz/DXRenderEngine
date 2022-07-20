@@ -1,7 +1,7 @@
 namespace DXTests;
 
 [TestClass]
-public class EngineMatrixTests
+public class MatrixTests
 {
     readonly Matrix4x4 Proj = new ProjectionDescription(90.0f, 0.01f, 1000.0f).GetMatrix();
 

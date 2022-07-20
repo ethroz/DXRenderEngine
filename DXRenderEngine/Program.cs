@@ -15,8 +15,8 @@ sealed class Program
     [MTAThread]
     static void Main()
     {
-        EngineDescription ED = new(ProjectionDescription.Default, "", 1920, 1080, -1, -1, 0,
-            FiveObjects, Start, Update, UserInput, cache: false);
+        EngineDescription ED = new(ProjectionDescription.Default, "", 1280, 720, -1, -1, 0,
+            FiveGlassObjects, Start, Update, UserInput, cache: true);
 
         ED = new RasterizingEngineDescription(ED, shadows: true);
         //ED = new RayTracingEngineDescription(ED, 3);

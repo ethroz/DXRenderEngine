@@ -208,8 +208,9 @@ public struct ConstantBuffer
 
     public unsafe int Insert<T>(T str, int index) where T : unmanaged
     {
+        const int mask4 = 3;
         Data info = objects[index];
-        int size = sizeof(T);
+        int size = (sizeof(T) + mask4) & ~mask4;
         if (info.size != size)
         {
             throw new ArgumentException("index=" + index + " inSize=" + size + " expSize=" + info.size);
@@ -224,7 +225,6 @@ public struct ConstantBuffer
 
     public unsafe int InsertArray<T>(T[] strs, int index) where T : unmanaged
     {
-        int size = sizeof(T);
         for (int i = 0; i < strs.Length; ++i)
         {
             index = Insert(strs[i], index);

@@ -6,6 +6,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Vortice.D3DCompiler;
 using Vortice.Direct3D;
@@ -20,6 +21,8 @@ namespace DXRenderEngine;
 
 /// <summary>
 /// TODO
+///     Initializing shaders screen -> fixes input device errors?
+///     multithreaded compiling
 ///     frame stutter -> DX12U
 /// </summary>
 
@@ -63,7 +66,7 @@ public class Engine : IDisposable
     protected ID3D11PixelShader pixelShader;
     protected Viewport screenViewport;
 
-    protected readonly string fileLocation;
+    protected readonly string exeLocation;
     protected string shaderCode;
     protected readonly string vertexShaderEntry;
     protected readonly string pixelShaderEntry;
@@ -91,6 +94,7 @@ public class Engine : IDisposable
     public bool Running { get; private set; }
     public bool IsDisposed { get; private set; }
     public readonly bool HasShader;
+    public bool ShadersReady { get; private set; }
     private Action Setup => Description.Setup;
     private Action Start => Description.Start;
     protected Action Update => Description.Update;
@@ -104,6 +108,7 @@ public class Engine : IDisposable
     internal double inputAvgFPS = 0.0;
     internal double inputAvgSleep = 0.0;
     protected Thread uiThread, controlThread, renderThread;
+    protected List<Task> compilerTasks = new();
     protected volatile Queue<Action> commands = new();
     protected readonly Vector3 LowerAtmosphere = new(0.0f, 0.0f, 0.0f);
     protected readonly Vector3 UpperAtmosphere = new Vector3(1.0f, 1.0f, 1.0f) * 0.0f;
@@ -118,8 +123,6 @@ public class Engine : IDisposable
     public void Run()
     {
         print("Running");
-        uiThread = Thread.CurrentThread;
-        uiThread.Name = "UI";
         Application.Run(window);
     }
 
@@ -181,9 +184,10 @@ public class Engine : IDisposable
         IsDisposed = false;
 
         Name = GetType().Name;
-        fileLocation = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
+        exeLocation = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar;
 
         HasShader = desc.ShaderResource.Length != 0;
+        ShadersReady = false;
 
         if (HasShader)
         {
@@ -281,24 +285,6 @@ public class Engine : IDisposable
         swapChain = new(factory.CreateSwapChainForHwnd(device, window.Handle, scd).NativePointer);
 
         SetRenderBuffers(Width, Height);
-
-        if (HasShader)
-        {
-            UpdateShaderConstants();
-
-            InitializeShaders();
-
-            long time1 = Milliseconds;
-            // get any hlsl defs in case arrays use them in the shader
-            GetDefs();
-
-            ParseConstantBuffers();
-
-            ParseSamplers();
-            print("Shader parsing time=" + (Milliseconds - time1) + "ms");
-
-            SetConstantBuffers();
-        }
     }
 
     protected virtual void SetRenderBuffers(int width, int height)
@@ -454,29 +440,39 @@ public class Engine : IDisposable
 
     protected virtual void InitializeShaders()
     {
-        Blob shaderBlob = GetShader(vertexShaderEntry, "VertexShader", "vs_5_0");
-        vertexShader = device.CreateVertexShader(shaderBlob);
+        AsyncGetShader(vertexShaderEntry, "VertexShader", "vs_5_0", 
+            (Blob b) => 
+            {
+                vertexShader = device.CreateVertexShader(b);
 
-        inputLayout = device.CreateInputLayout(inputElements, shaderBlob);
-        context.IASetInputLayout(inputLayout);
-        context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+                inputLayout = device.CreateInputLayout(inputElements, b);
+                context.IASetInputLayout(inputLayout);
+                context.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
+                
+                context.VSSetShader(vertexShader);
+            });
 
+        AsyncGetShader(pixelShaderEntry, "PixelShader", "ps_5_0", 
+            (Blob b) => 
+            {
+                pixelShader = device.CreatePixelShader(b);
+                context.PSSetShader(pixelShader);
+            });
+    }
+
+    protected void AsyncGetShader(string entryPoint, string sourceName, string profile, Action<Blob> callback)
+    {
+        Blob shaderBlob = Task.Factory.StartNew(() => GetShader(entryPoint, sourceName, profile)).Result;
+        callback(shaderBlob);
         shaderBlob.Dispose();
-
-        shaderBlob = GetShader(pixelShaderEntry, "PixelShader", "ps_5_0");
-        pixelShader = device.CreatePixelShader(shaderBlob);
-        shaderBlob.Dispose();
-
-        context.VSSetShader(vertexShader);
-        context.PSSetShader(pixelShader);
     }
 
     protected Blob GetShader(string entryPoint, string sourceName, string profile)
     {
-        string file = fileLocation + Name + entryPoint + "Cache.blob";
-        if (Description.UseShaderCache && File.Exists(profile))
+        string file = exeLocation + Name + '_' + entryPoint + "Cache.blob";
+        if (Description.UseShaderCache && File.Exists(file))
         {
-            return Compiler.ReadFileToBlob(profile);
+            return Compiler.ReadFileToBlob(file);
         }
         else
         {
@@ -539,15 +535,20 @@ public class Engine : IDisposable
         {
             avgFPS = frameCount / (double)(Ticks - startFPSTime) * SEC2TICK;
             startFPSTime = Ticks;
-            string text = Name + "   Frame: " + avgFPS.ToString("G4") +
-            "fps (" + minFPS.ToString("G4") + "fps, " + maxFPS.ToString("G4") + "fps)   Input: "
-            + inputAvgFPS.ToString("G4") + "fps (" + inputAvgSleep.ToString("G3") + ")";
+            string text = CreateTitle();
             window.BeginInvoke(new(() => window.Text = text));
             maxFPS = 0.0;
             minFPS = double.PositiveInfinity;
             frameCount = 0;
             lastReset = Milliseconds / STATS_DUR;
         }
+    }
+
+    protected virtual string CreateTitle()
+    {
+        return Name + "   Frame: " + avgFPS.ToString("G4") + "fps (" + minFPS.ToString("G4") + 
+            "fps, " + maxFPS.ToString("G4") + "fps)   Input: " + inputAvgFPS.ToString("G4") +
+            "fps (" + inputAvgSleep.ToString("G3") + ")";
     }
 
     // subclasses should always dispose this last and never assume that anything will be set
@@ -624,13 +625,11 @@ public class Engine : IDisposable
     {
         print("Loading");
         Running = true;
+        uiThread = Thread.CurrentThread;
+        uiThread.Name = "UI";
         Setup();
         InitializeDeviceResources();
         GetDisplayRefreshRate();
-        if (HasShader)
-            InitializeVertices();
-        Start();
-        PerApplicationUpdate();
     }
 
     private void Window_Shown(object sender, EventArgs e)
@@ -658,6 +657,36 @@ public class Engine : IDisposable
         {
             ToggleFullscreen();
         }
+
+        // will run while compiling.
+
+        if (HasShader)
+        {
+            UpdateShaderConstants();
+
+            InitializeShaders();
+
+            // wait for shader compilation to finish
+            Task.WaitAll(compilerTasks.ToArray(), -1);
+
+            long time1 = Milliseconds;
+            // get any hlsl defs in case arrays use them in the shader
+            GetDefs();
+
+            ParseConstantBuffers();
+
+            ParseSamplers();
+            print("Shader parsing time=" + (Milliseconds - time1) + "ms");
+
+            SetConstantBuffers();
+
+            InitializeVertices();
+
+            ShadersReady = true;
+        }
+
+        Start();
+        PerApplicationUpdate();
     }
 
     private void Closing(object sender, FormClosingEventArgs e)

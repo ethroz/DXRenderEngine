@@ -29,6 +29,7 @@ public class Input : IDisposable
     private long startFPSTime;
     private long lastReset = 0;
     private int sleepTime = 0;
+    private bool useSleep = true;
     private long loopCount;
 
     public Input(IntPtr handle, Engine reference, Action userInput)
@@ -47,16 +48,20 @@ public class Input : IDisposable
             switch (di.Type)
             {
                 case DeviceType.Keyboard:
+                    if (keyboard != null)
+                        break;
                     keyboard = di8.CreateDevice(di.ProductGuid);
-                    keyboard.SetDataFormat<RawKeyboardState>();
-                    keyboard.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive);
-                    keyboard.Acquire();
+                    Trace.Assert(keyboard.SetDataFormat<RawKeyboardState>().Success);
+                    Trace.Assert(keyboard.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive).Success);
+                    Trace.Assert(keyboard.Acquire().Success);
                     break;
                 case DeviceType.Mouse:
+                    if (mouse != null)
+                        break;
                     mouse = di8.CreateDevice(di.ProductGuid);
-                    mouse.SetDataFormat<RawMouseState>();
-                    mouse.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive);
-                    mouse.Acquire();
+                    Trace.Assert(mouse.SetDataFormat<RawMouseState>().Success);
+                    Trace.Assert(mouse.SetCooperativeLevel(handle, CooperativeLevel.Foreground | CooperativeLevel.NonExclusive).Success);
+                    Trace.Assert(mouse.Acquire().Success);
                     break;
             }
         }
@@ -78,7 +83,6 @@ public class Input : IDisposable
 
     private void InitializeKeyboard()
     {
-        Trace.Assert(keyboard.Acquire().Success);
         cheyArray = new Chey[KEYBOARD_BUFFER_SIZE];
         for (int i = 0; i < KEYBOARD_BUFFER_SIZE; ++i)
         {
@@ -139,7 +143,7 @@ public class Input : IDisposable
         if (POLLING_RATE != 0)
         {
             const long max = (long)(SEC2TICK / (double)POLLING_RATE);
-            if (1.0 / POLLING_RATE >= 0.001)
+            if (useSleep && 1.0 / POLLING_RATE >= 0.001)
             {
                 int remaining = (int)((max - t2 + t1) / 10000.0);
                 if (remaining > 0)
@@ -173,6 +177,13 @@ public class Input : IDisposable
     internal void ControlLoop()
     {
         t1 = startFPSTime = Ticks;
+        const int sleepTime = (int)(1000.0 / POLLING_RATE);
+        Thread.Sleep(sleepTime);
+        // Needs to be reasonably close.
+        if ((Ticks - t1) / 10000.0 > sleepTime * 1.2)
+        {
+            useSleep = false;
+        }
 
         while (reference.Running)
         {

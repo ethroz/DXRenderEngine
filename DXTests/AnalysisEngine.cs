@@ -6,14 +6,14 @@ public class AnalysisEngine : RasterizingEngine
 {
     public new readonly AnalysisEngineDescription Description;
     protected ID3D11Texture2D1 analysisBuffer;
-    public readonly Action<IntPtr, int> Analyze;
+    public Action<IntPtr, int> Analyze => Description.Analyze;
+    public Func<string> PercentDone => Description.PercentDone;
     public double DepthBias = 0.0;
 
     public AnalysisEngine(AnalysisEngineDescription ED) : base(ED)
     {
         window.ShowInTaskbar = !ED.Hidden;
         Description = ED;
-        Analyze = ED.Analyze;
     }
 
     protected override void ReleaseRenderBuffers()
@@ -22,6 +22,13 @@ public class AnalysisEngine : RasterizingEngine
         base.ReleaseRenderBuffers();
 
         analysisBuffer.Release();
+    }
+
+    protected override string CreateTitle()
+    {
+        if (PercentDone != null)
+            return base.CreateTitle() + "   " + PercentDone();
+        return base.CreateTitle();
     }
 
     protected override void SetRenderBuffers(int width, int height)

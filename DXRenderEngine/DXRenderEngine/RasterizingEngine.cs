@@ -155,19 +155,23 @@ public class RasterizingEngine : Engine
     {
         base.InitializeShaders();
 
-        Blob shaderBlob = GetShader("shadowVertexShader", "VertexShader", "vs_5_0");
-        shadowVertexShader = device.CreateVertexShader(shaderBlob);
-        shaderBlob.Dispose();
+        AsyncGetShader("shadowVertexShader", "VertexShader", "vs_5_0",
+            (Blob b) =>
+            {
+                shadowVertexShader = device.CreateVertexShader(b);
+            });
 
-        shaderBlob = GetShader("shadowGeometryShader", "GeometryShader", "gs_5_0");
-        shadowGeometryShader = device.CreateGeometryShader(shaderBlob);
-        shaderBlob.Dispose();
+        AsyncGetShader("shadowGeometryShader", "GeometryShader", "gs_5_0",
+            (Blob b) =>
+            {
+                shadowGeometryShader = device.CreateGeometryShader(b);
+            });
 
-        shaderBlob = GetShader("shadowPixelShader", "PixelShader", "ps_5_0");
-        shadowPixelShader = device.CreatePixelShader(shaderBlob);
-        shaderBlob.Dispose();
-
-        samplers = new ID3D11SamplerState[2];
+        AsyncGetShader("shadowPixelShader", "PixelShader", "ps_5_0",
+            (Blob b) =>
+            {
+                shadowPixelShader = device.CreatePixelShader(b);
+            });
 
         // color sampler
         SamplerDescription ssdesc = SamplerDescription.LinearClamp;
