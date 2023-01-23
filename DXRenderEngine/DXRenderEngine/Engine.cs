@@ -586,9 +586,12 @@ public class Engine : IDisposable
             Thread.Sleep(UNFOCUSED_TIMEOUT);
             return;
         }
-        Render();
-        Update();
-        PerFrameUpdate();
+        if (ShadersReady)
+        {
+            Render();
+            Update();
+            PerFrameUpdate();
+        }
         swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
     }
 
