@@ -682,7 +682,7 @@ public class Light
     public float Luminosity;
     public float NearPlane = 0.1f;
     public float FarPlane = 100.0f;
-    public int ShadowRes = 128;
+    public int ShadowRes = 1024;
     public ID3D11DepthStencilView ShadowStencilView;
     public ID3D11Texture2D1 ShadowTextures;
     public Viewport ShadowViewPort;
