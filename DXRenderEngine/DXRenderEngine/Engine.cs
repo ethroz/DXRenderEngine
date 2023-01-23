@@ -76,7 +76,7 @@ public class Engine : IDisposable
     public int Height => Description.Height;
 
     // Time Fields
-
+    //
     // Represents the time since the last frame
     public double RenderTime { get; private set; }
     // Represents the time since the last input update
@@ -551,7 +551,7 @@ public class Engine : IDisposable
             "fps (" + inputAvgSleep.ToString("G3") + ")";
     }
 
-    // subclasses should always dispose this last and never assume that anything will be set
+    //Subclasses should always dispose this last and assume that everything is null.
     protected virtual void Dispose(bool boolean)
     {
         gameobjects.Clear();
@@ -591,8 +591,8 @@ public class Engine : IDisposable
             Render();
             Update();
             PerFrameUpdate();
+            swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
         }
-        swapChain.Present(swapChain.IsFullscreen ? 1 : 0);
     }
 
     protected virtual void PerApplicationUpdate()
@@ -661,35 +661,43 @@ public class Engine : IDisposable
             ToggleFullscreen();
         }
 
-        // will run while compiling.
+        // Render the window frame while compiling.
 
         if (HasShader)
         {
-            UpdateShaderConstants();
+            commands.Enqueue(() =>
+            {
+                UpdateShaderConstants();
 
-            InitializeShaders();
+                InitializeShaders();
+                
+                // wait for shader compilation to finish
+                Task.WaitAll(compilerTasks.ToArray(), -1);
 
-            // wait for shader compilation to finish
-            Task.WaitAll(compilerTasks.ToArray(), -1);
+                long time1 = Milliseconds;
+                // get any hlsl defs in case arrays use them in the shader
+                GetDefs();
 
-            long time1 = Milliseconds;
-            // get any hlsl defs in case arrays use them in the shader
-            GetDefs();
+                ParseConstantBuffers();
 
-            ParseConstantBuffers();
+                ParseSamplers();
+                print("Shader parsing time=" + (Milliseconds - time1) + "ms");
 
-            ParseSamplers();
-            print("Shader parsing time=" + (Milliseconds - time1) + "ms");
+                SetConstantBuffers();
 
-            SetConstantBuffers();
+                InitializeVertices();
 
-            InitializeVertices();
+                ShadersReady = true;
 
-            ShadersReady = true;
+                Start();
+                PerApplicationUpdate();
+            });
         }
-
-        Start();
-        PerApplicationUpdate();
+        else
+        {
+            Start();
+            PerApplicationUpdate();
+        }
     }
 
     private void Closing(object sender, FormClosingEventArgs e)

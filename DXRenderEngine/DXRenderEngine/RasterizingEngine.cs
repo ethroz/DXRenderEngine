@@ -173,12 +173,15 @@ public class RasterizingEngine : Engine
                 shadowPixelShader = device.CreatePixelShader(b);
             });
 
+        // Use 2 samplers.
+        samplers = new ID3D11SamplerState[2];
+
         // color sampler
         SamplerDescription ssdesc = SamplerDescription.LinearClamp;
         samplers[0] = device.CreateSamplerState(ssdesc);
 
         // depth sampler
-        ssdesc = new(
+        ssdesc = new SamplerDescription(
             Filter.ComparisonMinMagMipLinear,
             TextureAddressMode.Border, 
             TextureAddressMode.Border, 
@@ -187,7 +190,7 @@ public class RasterizingEngine : Engine
         ssdesc.BorderColor = Colors.White;
         samplers[1] = device.CreateSamplerState(ssdesc);
 
-        context.PSSetSamplers(0, 2, samplers);
+        context.PSSetSamplers(0, samplers.Length, samplers);
     }
 
     protected override void SetConstantBuffers()
